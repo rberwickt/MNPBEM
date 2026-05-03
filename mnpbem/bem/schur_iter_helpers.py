@@ -136,10 +136,18 @@ class SchurIterOperator(LinearOperator):
 
         # Resolve g_ss_solver strategy.
         if g_ss_solver == 'auto':
+            # v1.6.0 (B-Schur): for operator-form eps the inner GMRES path
+            # becomes prohibitively expensive (each outer GMRES iter triggers
+            # a full inner Krylov sweep, doubling the per-matvec cost from
+            # the β v1.5.1 eps-apply + extra G/H matvec).  Dense LU probe
+            # is correct for any A_full and gives O(n²) per outer iter.
+            # Bump the lu_dense / gmres cutoff up to 4096 (≈128 MB at
+            # complex128; 8N=4096 covers 60-face nonlocal core-shell up
+            # to ~512 core faces) so operator-form callers get the cheap
+            # path.  Above the cutoff we fall back to inner GMRES because
+            # the dense probe + LU factor would exceed memory.
             if eps_form == 'operator':
-                # v1.6.0 (B-Schur): operator-form A_ss probe is ill-conditioned
-                # for nonlocal cover-layer; always inner-GMRES on this path.
-                g_ss_solver = 'gmres'
+                g_ss_solver = 'lu_dense' if self._n_shell <= 4096 else 'gmres'
             else:
                 g_ss_solver = 'lu_dense' if self._n_shell < 500 else 'gmres'
         self._g_ss_solver_kind = g_ss_solver
