@@ -9,7 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- (none — see [1.5.1] for the most recent release)
+- (none — see [1.5.2] for the most recent release)
+
+## [1.5.2] - 2026-05-02
+
+### Fixed
+
+- **Bug 5 — `HMatrix.full()` numpy/cupy interop** (`mnpbem/greenfun/hmatrix.py:374`).
+  v1.5.1 에서 `MNPBEM_GPU_NATIVE=1` 활성 시 `CompGreenRet` 가 cupy ndarray
+  를 반환하면 `HMatrix.val[i]` 가 cupy 가 되는데, `full()` 은 host numpy
+  buffer 에 cupy slice 를 implicit cast 하다 `TypeError: Implicit
+  conversion to a NumPy array is not allowed.` 로 실패. fix:
+  `full(xp=None)` 이 val/lhs/rhs 에서 cupy 자동 감지 → cupy backend 로
+  `mat` 할당, 블록별 numpy ↔ cupy 변환 헬퍼로 device 통일. caller 가
+  `xp=np` 또는 `xp=cupy` 강제도 가능.
+- **Bug 6 — `_plus_hmat` / `_truncate_block` backend 통일**. region (0,0)
+  val 은 cupy, region (1,0) val 은 numpy 인 경우 (Au@Ag 처럼 multi-region
+  + cross-connectivity) `G11 - G21` 이 `Unsupported type
+  <numpy.ndarray>` 로 실패. fix: `_same_backend(a, b)` 헬퍼로 한쪽이라도
+  cupy 면 양쪽 cupy 로 승격, `_truncate_block` QR/SVD 도 lhs 가 cupy 면
+  `xp=cupy` dispatch.
+- **Tier-3 12672-face Au@Ag GPU full validation 통과** —
+  `MNPBEM_GPU=1 + iter+hmat+precond + multi-GPU wavelength-split` 경로가
+  처음으로 end-to-end 정상 완료. v1.5.0/v1.5.1 의 BAD grade 해소.
+
+### Added
+
+- `mnpbem/tests/test_hmatrix_full_consistency.py` — 8 tests, cupy/numpy
+  full() 일치, 강제 xp 인자, mixed blocks, ACA dense=cupy/lhs=numpy
+  realistic 시나리오, BEMRetIter._init_matrices GPU end-to-end smoke.
+
+### Backward compatibility
+
+100% backward compatible with v1.5.1. `HMatrix.full()` signature 가
+`full(xp=None)` 로 확장되어도 기본값이 auto-detect 이므로 기존 caller
+변경 불필요.
 
 ## [1.5.1] - 2026-05-02
 

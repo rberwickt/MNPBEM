@@ -335,33 +335,76 @@ class HMatrix(object):
 
         return U_mat[:, :rank].copy(), V_mat[:, :rank].copy()
 
-    def full(self) -> np.ndarray:
+    def full(self, xp: Any = None) -> Any:
 
         # MATLAB: @hmatrix/full.m
-        # Convert H-matrix to full dense matrix
+        # Convert H-matrix to full dense matrix.
+        #
+        # Bug 5 fix (v1.5.2): when any of ``self.val`` / ``self.lhs`` /
+        # ``self.rhs`` lives on a CUDA device (cupy ndarray), the host
+        # numpy buffer used to live in v1.5.1 raised ``TypeError: Implicit
+        # conversion to a NumPy array is not allowed`` on the slice
+        # assignment.  We now auto-detect the backend by sniffing the
+        # blocks for cupy ndarrays; if any are found, ``mat`` is allocated
+        # on the GPU and any leftover numpy block is promoted via
+        # ``cupy.asarray``.  Conversely, when ``xp`` is forced to numpy by
+        # the caller, cupy blocks are pulled to host with ``.get()``.
+        # This keeps every existing CPU caller bit-identical while letting
+        # the BEMRetIter dense-LU preconditioner build run end-to-end on
+        # GPU for Tier-3 (12672-face) Au@Ag.
         tree = self.tree
         n = tree.n
-        mat = np.zeros((n, n), dtype = np.float64)
 
-        # Check if any block is complex
+        # Auto-detect GPU presence in any block.
+        on_gpu = False
+        for blk_list in (self.val, self.lhs, self.rhs):
+            for blk in blk_list:
+                if blk is not None and hasattr(blk, 'get') and not isinstance(blk, np.ndarray):
+                    on_gpu = True
+                    break
+            if on_gpu:
+                break
+
+        xp_was_auto = (xp is None)
+        if xp is None:
+            if on_gpu:
+                import cupy as _xp_module
+                xp = _xp_module
+            else:
+                xp = np
+
+        is_cupy_backend = (xp is not np)
+
+        # Check if any block is complex (works for both numpy and cupy).
         is_complex = False
         for v in self.val:
-            if v is not None and np.iscomplexobj(v):
+            if v is not None and np.issubdtype(v.dtype, np.complexfloating):
                 is_complex = True
                 break
         if not is_complex:
             for l in self.lhs:
-                if l is not None and np.iscomplexobj(l):
+                if l is not None and np.issubdtype(l.dtype, np.complexfloating):
                     is_complex = True
                     break
         if not is_complex:
             for r in self.rhs:
-                if r is not None and np.iscomplexobj(r):
+                if r is not None and np.issubdtype(r.dtype, np.complexfloating):
                     is_complex = True
                     break
 
-        if is_complex:
-            mat = np.zeros((n, n), dtype = np.complex128)
+        out_dtype = np.complex128 if is_complex else np.float64
+        mat = xp.zeros((n, n), dtype = out_dtype)
+
+        def _cast(blk: Any) -> Any:
+            # Bring a block to the destination backend.  Cupy blocks expose
+            # ``.get()`` returning numpy; numpy blocks accept
+            # ``cupy.asarray``.
+            blk_is_cupy = hasattr(blk, 'get') and not isinstance(blk, np.ndarray)
+            if is_cupy_backend and not blk_is_cupy:
+                return xp.asarray(blk)
+            if (not is_cupy_backend) and blk_is_cupy:
+                return blk.get()
+            return blk
 
         # Fill dense blocks
         for i in range(len(self.row1)):
@@ -371,7 +414,7 @@ class HMatrix(object):
             r_end = tree.cind[self.row1[i], 1] + 1
             c_start = tree.cind[self.col1[i], 0]
             c_end = tree.cind[self.col1[i], 1] + 1
-            mat[r_start:r_end, c_start:c_end] = self.val[i]
+            mat[r_start:r_end, c_start:c_end] = _cast(self.val[i])
 
         # Fill low-rank blocks
         for i in range(len(self.row2)):
@@ -381,17 +424,28 @@ class HMatrix(object):
             r_end = tree.cind[self.row2[i], 1] + 1
             c_start = tree.cind[self.col2[i], 0]
             c_end = tree.cind[self.col2[i], 1] + 1
-            # lhs @ rhs.T
-            mat[r_start:r_end, c_start:c_end] = self.lhs[i] @ self.rhs[i].T
+            lhs_blk = _cast(self.lhs[i])
+            rhs_blk = _cast(self.rhs[i])
+            # lhs @ rhs.T (kept on the destination backend)
+            mat[r_start:r_end, c_start:c_end] = lhs_blk @ rhs_blk.T
 
-        # Transform from cluster ordering to particle ordering
-        ind_c2p = tree.ind[:, 0]
-        # mat is in cluster ordering, need to permute to particle ordering
-        # mat_particle[p_i, p_j] = mat_cluster[c_i, c_j]
-        # where c_i = part_to_cluster[p_i], but we need inverse:
-        # particle row i should come from cluster row ind[:,1][i]
-        result = mat[np.ix_(tree.ind[:, 1], tree.ind[:, 1])]
-        return result
+        # Transform from cluster ordering to particle ordering.  Fancy
+        # indexing materialises a fresh N x N buffer; on GPU this would
+        # double the working set and OOM the 49 GB A6000 at Tier-3
+        # (12672 face -> 50 GB matrix).  Pull to host first when the
+        # operand lives on GPU; the immediate downstream consumer
+        # (BEMRetIter._init_precond) calls ``to_host(...)`` on the
+        # result anyway.  Callers wanting to keep the result on GPU can
+        # pass ``xp=cupy`` and accept the extra device allocation.
+        perm = tree.ind[:, 1]
+        if is_cupy_backend and xp_was_auto:
+            mat_h = xp.asnumpy(mat)
+            del mat
+            return mat_h[np.ix_(perm, perm)]
+        if is_cupy_backend:
+            perm_xp = xp.asarray(perm)
+            return mat[xp.ix_(perm_xp, perm_xp)]
+        return mat[np.ix_(perm, perm)]
 
     def mtimes_vec(self, v: np.ndarray) -> np.ndarray:
 
@@ -492,12 +546,38 @@ class HMatrix(object):
     def _plus_hmat(self, other: 'HMatrix') -> 'HMatrix':
 
         # MATLAB: plus2 - Add two H-matrices with same structure
+        #
+        # Bug 6 fix (v1.5.2): when one operand has cupy blocks and the
+        # other has numpy blocks (commonly: region (0,0) goes through
+        # CompGreenRet's GPU-native path while region (1,0) doesn't), the
+        # naive ``a + b`` raises ``TypeError: Unsupported type
+        # <numpy.ndarray>``.  We pull both operands to the same backend
+        # before adding.  Preference is GPU when either side is cupy so
+        # the result fits the downstream HMatrix.full() GPU path.
         result = self._copy()
+
+        def _same_backend(a: Any, b: Any) -> Tuple[Any, Any]:
+            a_is_cupy = hasattr(a, 'get') and not isinstance(a, np.ndarray)
+            b_is_cupy = hasattr(b, 'get') and not isinstance(b, np.ndarray)
+            if a_is_cupy == b_is_cupy:
+                return a, b
+            try:
+                import cupy as _cp_local
+            except Exception:
+                # Cupy missing yet one of the inputs has .get(); fall back
+                # to host arithmetic.
+                a_h = a.get() if a_is_cupy else a
+                b_h = b.get() if b_is_cupy else b
+                return a_h, b_h
+            if a_is_cupy:
+                return a, _cp_local.asarray(b)
+            return _cp_local.asarray(a), b
 
         # Add dense blocks
         for i in range(len(result.row1)):
             if result.val[i] is not None and other.val[i] is not None:
-                result.val[i] = result.val[i] + other.val[i]
+                a, b = _same_backend(result.val[i], other.val[i])
+                result.val[i] = a + b
             elif other.val[i] is not None:
                 result.val[i] = other.val[i].copy()
 
@@ -516,15 +596,24 @@ class HMatrix(object):
             elif lhs2 is None:
                 pass  # keep result as is
             else:
+                # Match backends before stacking columns.
+                lhs1, lhs2 = _same_backend(lhs1, lhs2)
+                rhs1, rhs2 = _same_backend(rhs1, rhs2)
+                lhs1_is_cupy = hasattr(lhs1, 'get') and not isinstance(lhs1, np.ndarray)
+                xp_lr = np
+                if lhs1_is_cupy:
+                    import cupy as _cp_local
+                    xp_lr = _cp_local
+
                 # Combine: [lhs1, lhs2] and [rhs1, rhs2]
                 m = lhs1.shape[0]
                 n = rhs1.shape[0]
                 k1 = lhs1.shape[1]
                 k2 = lhs2.shape[1]
-                new_lhs = np.empty((m, k1 + k2), dtype = lhs1.dtype)
+                new_lhs = xp_lr.empty((m, k1 + k2), dtype = lhs1.dtype)
                 new_lhs[:, :k1] = lhs1
                 new_lhs[:, k1:] = lhs2
-                new_rhs = np.empty((n, k1 + k2), dtype = rhs1.dtype)
+                new_rhs = xp_lr.empty((n, k1 + k2), dtype = rhs1.dtype)
                 new_rhs[:, :k1] = rhs1
                 new_rhs[:, k1:] = rhs2
                 result.lhs[i] = new_lhs
@@ -556,23 +645,36 @@ class HMatrix(object):
             htol: float) -> Tuple[np.ndarray, np.ndarray]:
 
         # MATLAB: truncate/fun
-        if np.linalg.norm(lhs.ravel()) < np.finfo(float).eps:
+        # Bug 6 fix (v1.5.2): when blocks live on GPU (cupy) the np.linalg
+        # routines below would force a host sync per block and re-allocate
+        # the QR / SVD scratch on host.  Detect cupy operands and dispatch
+        # to ``cupy.linalg.{qr,svd}`` so the recompression stays on-device.
+        lhs_is_cupy = hasattr(lhs, 'get') and not isinstance(lhs, np.ndarray)
+        if lhs_is_cupy:
+            import cupy as _cp_local
+            xp = _cp_local
+        else:
+            xp = np
+
+        if xp.linalg.norm(lhs.ravel()) < np.finfo(float).eps:
             return lhs, rhs
-        if np.linalg.norm(rhs.ravel()) < np.finfo(float).eps:
+        if xp.linalg.norm(rhs.ravel()) < np.finfo(float).eps:
             return lhs, rhs
 
-        q1, r1 = np.linalg.qr(lhs, mode = 'reduced')
-        q2, r2 = np.linalg.qr(rhs, mode = 'reduced')
+        q1, r1 = xp.linalg.qr(lhs, mode = 'reduced')
+        q2, r2 = xp.linalg.qr(rhs, mode = 'reduced')
 
         # SVD of r1 @ r2.T
-        u_svd, s_svd, vt_svd = np.linalg.svd(r1 @ r2.T, full_matrices = False)
+        u_svd, s_svd, vt_svd = xp.linalg.svd(r1 @ r2.T, full_matrices = False)
 
-        # Find largest singular values: keep k such that cumsum(s) < (1-htol)*sum(s)
-        total = np.sum(s_svd)
+        # Find largest singular values: keep k such that cumsum(s) < (1-htol)*sum(s).
+        # Truncation thresholding stays on host (singular values are O(rank)).
+        s_host = s_svd.get() if lhs_is_cupy else s_svd
+        total = float(np.sum(s_host))
         if total < np.finfo(float).eps:
             return lhs[:, :1] * 0, rhs[:, :1] * 0
 
-        cum = np.cumsum(s_svd)
+        cum = np.cumsum(s_host)
         threshold = (1.0 - htol) * total
         k_idx = np.where(cum < threshold)[0]
 
@@ -583,7 +685,7 @@ class HMatrix(object):
             k = len(k_idx)
 
         # Truncated decomposition
-        new_lhs = q1 @ (u_svd[:, :k] * s_svd[:k][np.newaxis, :])
+        new_lhs = q1 @ (u_svd[:, :k] * s_svd[:k][xp.newaxis, :])
         new_rhs = q2 @ vt_svd[:k, :].T  # q2 @ conj(v[:, :k])
 
         return new_lhs, new_rhs
