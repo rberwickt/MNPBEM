@@ -204,6 +204,39 @@ def lu_backend(piv_pkg: Tuple) -> str:
     return piv_pkg[0]
 
 
+def eye_like_lu(piv_pkg: Tuple,
+        n: int,
+        dtype: Any = None) -> Any:
+    # Return an identity matrix on the same device as the LU package.
+    # Used by callers that build A^{-1} = lu_solve(LU, eye(n)) and then
+    # multiply with another matrix that lives on the same device as the
+    # LU.  For the multi-GPU 'mgpu' tag the distributed solve only
+    # accepts host arrays, so fall back to numpy.
+    tag = piv_pkg[0]
+    if tag == 'gpu' and _CUPY_OK:
+        if dtype is None:
+            return _cp.eye(n)
+        return _cp.eye(n, dtype = dtype)
+    if dtype is None:
+        return np.eye(n)
+    return np.eye(n, dtype = dtype)
+
+
+def to_host(x: Any) -> np.ndarray:
+    # Materialize ``x`` on the host as a NumPy array.  Accepts numpy
+    # arrays, cupy arrays, and array-like scalars.  Used at boundaries
+    # where downstream code cannot accept a cupy ndarray.
+    if _CUPY_OK and isinstance(x, _cp.ndarray):
+        return _cp.asnumpy(x)
+    return np.asarray(x)
+
+
+def is_cupy_array(x: Any) -> bool:
+    # True iff ``x`` is a cupy ndarray.  Cheap helper that avoids the
+    # ``hasattr(x, 'get')`` idiom (which also matches dict).
+    return _CUPY_OK and isinstance(x, _cp.ndarray)
+
+
 def solve_dispatch(A: np.ndarray, b: np.ndarray, **kwargs: Any) -> np.ndarray:
     """One-shot Ax=b: dense solve on GPU when beneficial, else CPU.
 

@@ -201,12 +201,28 @@ class HMatrix(object):
 
         # Partially-pivoted Adaptive Cross Approximation for a single block
         # Returns (U, V) such that A ~ U @ V.T
+
+        # Bug 3 fix: ensure rows/cols index arrays live on host (numpy).
+        # Some GPU-aware callers may hand us cupy index arrays; the rest of
+        # this CPU ACA path uses np.argmax / np.full / boolean masks which
+        # cupy refuses to index implicitly with numpy ints.  Coerce once.
+        if hasattr(rows, 'get') and not isinstance(rows, np.ndarray):
+            rows = rows.get()
+        else:
+            rows = np.asarray(rows)
+        if hasattr(cols, 'get') and not isinstance(cols, np.ndarray):
+            cols = cols.get()
+        else:
+            cols = np.asarray(cols)
+
         m = len(rows)
         n = len(cols)
         max_rank = min(m, n, kmax)
 
         # Probe dtype from function output
         probe = fun(rows[:1], cols[:1])
+        if hasattr(probe, 'get') and not isinstance(probe, np.ndarray):
+            probe = probe.get()
         out_dtype = np.complex128 if np.iscomplexobj(probe) else np.float64
 
         # Pre-allocate U and V matrices (grow columns as needed)
@@ -224,9 +240,12 @@ class HMatrix(object):
 
         for k in range(max_rank):
             # Compute row of residual at pivot_row_local
-            row_global = rows[pivot_row_local]
+            row_global = int(rows[pivot_row_local])
             row_c = np.full(n, row_global, dtype=np.int64)
             row_vals = fun(row_c, cols)
+            # Bug 3 fix: cupy → numpy if a GPU-aware ``fun`` returned cupy.
+            if hasattr(row_vals, 'get') and not isinstance(row_vals, np.ndarray):
+                row_vals = row_vals.get()
 
             # Subtract contributions from previous approximants
             if rank > 0:
@@ -240,16 +259,20 @@ class HMatrix(object):
             # Find pivot column (max absolute value in unused columns)
             abs_row = np.abs(row_vals)
             abs_row[used_col_mask] = 0.0
-            pivot_col_local = np.argmax(abs_row)
+            pivot_col_local = int(np.argmax(abs_row))
             pivot_val = row_vals[pivot_col_local]
 
             if np.abs(pivot_val) < 1e-15:
                 break
 
             # Compute column of residual at pivot_col_local
-            col_global = cols[pivot_col_local]
+            # Bug 3 fix: explicit int() so cols[pivot_col_local] never hits
+            # cupy's implicit-numpy-index refusal even if cols was cupy.
+            col_global = int(cols[pivot_col_local])
             col_c = np.full(m, col_global, dtype=np.int64)
             col_vals = fun(rows, col_c)
+            if hasattr(col_vals, 'get') and not isinstance(col_vals, np.ndarray):
+                col_vals = col_vals.get()
 
             # Subtract contributions from previous approximants
             if rank > 0:
@@ -305,7 +328,7 @@ class HMatrix(object):
             # Choose next pivot row: row with max |u_new| among unused rows
             abs_u = np.abs(u_new)
             abs_u[used_row_mask] = 0.0
-            pivot_row_local = np.argmax(abs_u)
+            pivot_row_local = int(np.argmax(abs_u))
 
         if rank == 0:
             return np.zeros((m, 1), dtype=out_dtype), np.zeros((n, 1), dtype=out_dtype)

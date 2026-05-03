@@ -7,7 +7,10 @@ import numpy as np
 from scipy.sparse.linalg import LinearOperator
 
 from ..greenfun import CompStruct
-from ..utils.gpu import lu_factor_dispatch, lu_solve_dispatch
+from ..utils.gpu import (
+    lu_factor_dispatch, lu_solve_dispatch, lu_solve_native,
+    eye_like_lu, to_host, is_cupy_array,
+)
 from ..utils.matlab_compat import msqrt
 from .bem_iter import BEMIter
 
@@ -246,6 +249,14 @@ class BEMRetIter(BEMIter):
         G2 = self._compress(self._G2)
         H2 = self._compress(self._H2)
 
+        # Bug 2 fix: coerce any cupy operands down to host before the
+        # CPU-style dense preconditioner pipeline so the eps_diag /
+        # H @ G^{-1} GEMMs do not mix devices.
+        if is_cupy_array(G1): G1 = to_host(G1)
+        if is_cupy_array(G2): G2 = to_host(G2)
+        if is_cupy_array(H1): H1 = to_host(H1)
+        if is_cupy_array(H2): H2 = to_host(H2)
+
         # Dielectric as diagonal matrices for matrix operations
         if np.isscalar(eps1) or (isinstance(eps1, np.ndarray) and eps1.ndim == 0):
             eps1_diag = eps1
@@ -257,8 +268,12 @@ class BEMRetIter(BEMIter):
         # LU factorizations of Green functions
         G1_lu = lu_factor_dispatch(G1)
         G2_lu = lu_factor_dispatch(G2)
-        G1i = lu_solve_dispatch(G1_lu, np.eye(G1.shape[0]))
-        G2i = lu_solve_dispatch(G2_lu, np.eye(G2.shape[0]))
+        # Bug 2 fix: build identity on the same device as the LU and
+        # bring the inverse back to host for the H @ G^{-1} GEMM.
+        eye_g1 = eye_like_lu(G1_lu, G1.shape[0])
+        eye_g2 = eye_like_lu(G2_lu, G2.shape[0])
+        G1i = to_host(lu_solve_native(G1_lu, eye_g1))
+        G2i = to_host(lu_solve_native(G2_lu, eye_g2))
 
         # Sigma matrices [Eq. (21)]
         Sigma1 = H1 @ G1i
@@ -266,7 +281,8 @@ class BEMRetIter(BEMIter):
 
         # LU factorization of Delta matrix
         Delta_lu = lu_factor_dispatch(Sigma1 - Sigma2)
-        Deltai = lu_solve_dispatch(Delta_lu, np.eye(Sigma1.shape[0]))
+        eye_d = eye_like_lu(Delta_lu, Sigma1.shape[0])
+        Deltai = to_host(lu_solve_native(Delta_lu, eye_d))
 
         # deps = eps1 - eps2
         if np.isscalar(eps1_diag):

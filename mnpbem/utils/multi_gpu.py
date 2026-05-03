@@ -60,6 +60,24 @@ def _detect_gpu_count() -> int:
         return 0
 
 
+def _resolve_bem_class(bem_class_name: Optional[str]) -> Any:
+    # Bug 4 fix: workers run in spawn-ed processes so we cannot pickle a
+    # class reference reliably across all setups.  Pass the BEM solver as
+    # a string ('BEMRet', 'BEMRetIter', 'BEMRetLayer', 'BEMRetLayerIter')
+    # and resolve it inside the worker after MNPBEM_GPU has been set.
+    from mnpbem import bem as _bem_pkg
+
+    if bem_class_name is None or bem_class_name == 'BEMRet':
+        return _bem_pkg.BEMRet
+    if bem_class_name == 'BEMRetIter':
+        return _bem_pkg.BEMRetIter
+    if bem_class_name == 'BEMRetLayer':
+        return _bem_pkg.BEMRetLayer
+    if bem_class_name == 'BEMRetLayerIter':
+        return _bem_pkg.BEMRetLayerIter
+    raise ValueError('[error] Unsupported <bem_class>: {}'.format(bem_class_name))
+
+
 def _worker(gpu_idx: int,
             wl_indices: List[int],
             enei_chunk: List[float],
@@ -67,7 +85,8 @@ def _worker(gpu_idx: int,
             pol_dirs: Sequence[Sequence[float]],
             prop_dirs: Sequence[Sequence[float]],
             queue: 'mp.Queue',
-            bem_kwargs: dict) -> None:
+            bem_kwargs: dict,
+            bem_class_name: Optional[str] = None) -> None:
     """Worker process: solve one wavelength chunk on a single GPU."""
     # Bind CUDA device.  Must happen before any cupy import is triggered
     # transitively by mnpbem.* .
@@ -76,11 +95,12 @@ def _worker(gpu_idx: int,
     os.environ.setdefault('MNPBEM_NUMBA', '1')
 
     try:
-        from mnpbem.bem import BEMRet
         from mnpbem.simulation import PlaneWaveRet
 
+        BEMClass = _resolve_bem_class(bem_class_name)
+
         p = particle_factory()
-        bem = BEMRet(p, **bem_kwargs)
+        bem = BEMClass(p, **bem_kwargs)
         exc = PlaneWaveRet(list(pol_dirs), list(prop_dirs))
 
         # Warmup at first lambda so cupy/numba kernel cache is warm before
@@ -131,7 +151,8 @@ def solve_spectrum_multi_gpu(
         pol_dirs: Sequence[Sequence[float]],
         prop_dirs: Sequence[Sequence[float]],
         n_gpus: Optional[int] = None,
-        bem_kwargs: Optional[dict] = None) -> dict:
+        bem_kwargs: Optional[dict] = None,
+        bem_class: Optional[Any] = None) -> dict:
     """Solve a wavelength spectrum across multiple GPUs.
 
     Parameters
@@ -146,7 +167,12 @@ def solve_spectrum_multi_gpu(
     n_gpus : int, optional
         Worker count.  Defaults to the detected GPU count, capped at 4.
     bem_kwargs : dict, optional
-        Extra keyword arguments forwarded to ``BEMRet`` (e.g. hmode).
+        Extra keyword arguments forwarded to the BEM solver (e.g. hmode).
+    bem_class : class or str, optional
+        BEM solver class to use inside each worker.  Accepts the class
+        object (e.g. ``mnpbem.bem.BEMRetIter``) or its name as a string.
+        Defaults to ``BEMRet``.  Bug 4 fix: previously hard-coded so
+        ``simulation.type=ret_iter`` was silently ignored.
 
     Returns
     -------
@@ -160,6 +186,16 @@ def solve_spectrum_multi_gpu(
     if bem_kwargs is None:
         bem_kwargs = {}
     enei = np.asarray(enei, dtype=float)
+
+    # Bug 4 fix: accept either a class object or its bare name.  We pass
+    # only the name to the spawn-ed worker so the parent module does not
+    # need to be importable / picklable in every environment.
+    if bem_class is None:
+        bem_class_name = None
+    elif isinstance(bem_class, str):
+        bem_class_name = bem_class
+    else:
+        bem_class_name = bem_class.__name__
 
     if n_gpus is None:
         n_gpus = _detect_gpu_count()
@@ -184,7 +220,8 @@ def solve_spectrum_multi_gpu(
         p = ctx.Process(
             target=_worker,
             args=(g, wl_indices, enei_chunk, particle_factory,
-                  list(pol_dirs), list(prop_dirs), queue, dict(bem_kwargs)),
+                  list(pol_dirs), list(prop_dirs), queue, dict(bem_kwargs),
+                  bem_class_name),
         )
         p.start()
         procs.append(p)

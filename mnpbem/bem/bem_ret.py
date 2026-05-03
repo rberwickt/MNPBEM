@@ -17,6 +17,7 @@ from scipy.linalg import lu_factor, lu_solve
 import os
 from ..utils.gpu import (
     lu_factor_dispatch, lu_solve_dispatch, lu_solve_native, matmul_dispatch,
+    eye_like_lu, lu_backend, to_host, is_cupy_array,
 )
 from ..greenfun import CompGreenRet, CompStruct
 
@@ -309,7 +310,12 @@ class BEMRet(object):
         #         G2 = g{2,2}.G(enei) - g{1,2}.G(enei)
         # Use region-based indexing: 0=inside, 1=outside
         def _to_dense(x):
-            return x.full() if hasattr(x, 'full') and not isinstance(x, np.ndarray) else x
+            x = x.full() if hasattr(x, 'full') and not isinstance(x, np.ndarray) else x
+            # Bug 1 fix: if upstream Green-function returned a cupy array
+            # (Lane A GPU path), coerce to host here.  The CPU init path
+            # below mixes G1/H1 with host eps1/eps2/nvec; a cupy/numpy mix
+            # would otherwise blow up at the first GEMM.
+            return to_host(x) if is_cupy_array(x) else x
         G11 = _to_dense(self.g.eval(0, 0, 'G', enei))  # inside → inside
         G21 = _to_dense(self.g.eval(1, 0, 'G', enei))  # outside → inside
         G22 = _to_dense(self.g.eval(1, 1, 'G', enei))  # outside → outside
@@ -344,9 +350,16 @@ class BEMRet(object):
         self.G1_lu = lu_factor_dispatch(G1, **_lu_opts)
         self.G2_lu = lu_factor_dispatch(G2, **_lu_opts)
 
-        # Compute inverses for intermediate matrix construction
-        G1i = lu_solve_dispatch(self.G1_lu, np.eye(G1.shape[0]))
-        G2i = lu_solve_dispatch(self.G2_lu, np.eye(G2.shape[0]))
+        # Compute inverses for intermediate matrix construction.
+        # Bug 1 fix: when the LU lives on GPU, build the identity RHS on the
+        # same device so lu_solve_native returns a cupy array; we then bring
+        # the result back to host for matmul with G1/eps1 (host arrays).
+        # This avoids the cupy/numpy mix that caused the matmul failure on
+        # cusolverMg paths.
+        eye_g1 = eye_like_lu(self.G1_lu, G1.shape[0])
+        eye_g2 = eye_like_lu(self.G2_lu, G2.shape[0])
+        G1i = to_host(lu_solve_native(self.G1_lu, eye_g1))
+        G2i = to_host(lu_solve_native(self.G2_lu, eye_g2))
 
         # L matrices [Eq. (22)]
         # MATLAB: if all(obj.g.con{1,2} == 0), L1 = eps1; L2 = eps2
@@ -374,7 +387,8 @@ class BEMRet(object):
         # LU factorization of Delta matrix
         Delta = self.Sigma1 - Sigma2
         self.Delta_lu = lu_factor_dispatch(Delta, **_lu_opts)
-        Deltai = lu_solve_dispatch(self.Delta_lu, np.eye(Delta.shape[0]))
+        eye_d = eye_like_lu(self.Delta_lu, Delta.shape[0])
+        Deltai = to_host(lu_solve_native(self.Delta_lu, eye_d))
 
         # Combined Sigma matrix [Eq. (21,22)]
         # Sigma = Sigma1*L1 - Sigma2*L2 + k²*(L*Deltai)*(nvec*nvec')*L
