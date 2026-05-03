@@ -275,6 +275,17 @@ class BEMRetIter(BEMIter):
         if is_cupy_array(H1): H1 = to_host(H1)
         if is_cupy_array(H2): H2 = to_host(H2)
 
+        # Bug 5/6 (v1.5.2) Tier-3 12672-face follow-up: cupy memory pool
+        # accumulates the per-block GPU buffers from the four _compress()
+        # full() calls above (~10 GB even after _del_).  Drain the pool
+        # before launching the GPU LU pipeline so the 49 GB single-GPU
+        # cap is not exceeded by stale pool blocks.
+        try:
+            import cupy as _cp_local
+            _cp_local.get_default_memory_pool().free_all_blocks()
+        except Exception:
+            pass
+
         # Dielectric as diagonal matrices for matrix operations
         if np.isscalar(eps1) or (isinstance(eps1, np.ndarray) and eps1.ndim == 0):
             eps1_diag = eps1
@@ -283,15 +294,41 @@ class BEMRetIter(BEMIter):
             eps1_diag = np.diag(eps1)
             eps2_diag = np.diag(eps2)
 
-        # LU factorizations of Green functions
+        # LU factorizations of Green functions.  Tier-3 12672-face note:
+        # each cuSolver LU keeps the factor + pivots on device (~5 GB
+        # working set per matrix when overwrite_a=True+scratch).  We
+        # build G1_lu, drain the pool, then G2_lu so the two factor
+        # buffers don't double up alongside transient cuSolver scratch.
         G1_lu = lu_factor_dispatch(G1)
+        try:
+            import cupy as _cp_local
+            _cp_local.get_default_memory_pool().free_all_blocks()
+        except Exception:
+            pass
         G2_lu = lu_factor_dispatch(G2)
+        try:
+            import cupy as _cp_local
+            _cp_local.get_default_memory_pool().free_all_blocks()
+        except Exception:
+            pass
         # Bug 2 fix: build identity on the same device as the LU and
         # bring the inverse back to host for the H @ G^{-1} GEMM.
         eye_g1 = eye_like_lu(G1_lu, G1.shape[0])
-        eye_g2 = eye_like_lu(G2_lu, G2.shape[0])
         G1i = to_host(lu_solve_native(G1_lu, eye_g1))
+        del eye_g1
+        try:
+            import cupy as _cp_local
+            _cp_local.get_default_memory_pool().free_all_blocks()
+        except Exception:
+            pass
+        eye_g2 = eye_like_lu(G2_lu, G2.shape[0])
         G2i = to_host(lu_solve_native(G2_lu, eye_g2))
+        del eye_g2
+        try:
+            import cupy as _cp_local
+            _cp_local.get_default_memory_pool().free_all_blocks()
+        except Exception:
+            pass
 
         # Sigma matrices [Eq. (21)]
         Sigma1 = H1 @ G1i
@@ -301,6 +338,12 @@ class BEMRetIter(BEMIter):
         Delta_lu = lu_factor_dispatch(Sigma1 - Sigma2)
         eye_d = eye_like_lu(Delta_lu, Sigma1.shape[0])
         Deltai = to_host(lu_solve_native(Delta_lu, eye_d))
+        del eye_d
+        try:
+            import cupy as _cp_local
+            _cp_local.get_default_memory_pool().free_all_blocks()
+        except Exception:
+            pass
 
         # L matrices [Eq. (22)] - dense BEMRet form
         # L1 = G1 · eps1 · G1⁻¹  (operator generalisation of scalar eps)
@@ -331,6 +374,11 @@ class BEMRetIter(BEMIter):
             Sigma_mat = Sigma_L1 - Sigma_L2 + magnetic
 
         Sigma_lu = lu_factor_dispatch(Sigma_mat)
+        try:
+            import cupy as _cp_local
+            _cp_local.get_default_memory_pool().free_all_blocks()
+        except Exception:
+            pass
 
         # Save variables for preconditioner.  Note: ``Sigma1`` cached here
         # is the v1.5.1 operator-form Sigma1·L1 (= H1·eps1·G1⁻¹), used by
