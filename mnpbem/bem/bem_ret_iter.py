@@ -32,10 +32,16 @@ class BEMRetIter(BEMIter):
         # components (phi, a_x, a_y, a_z, phip, ap_x, ap_y, ap_z) share
         # the same face-level partition, lifted to the 8N packed vector
         # layout used by ``_pack`` / ``_unpack``.
+        # v1.6.0 (B-Schur): added ``schur_eps_form`` to communicate to the
+        # SchurIterOperator that ``_afun`` uses operator-form eps (β fix).
+        # Default 'auto' picks 'operator' if eps is non-uniform per region
+        # (then dense A_ss probe is ill-conditioned → inner GMRES); else
+        # 'pointwise' (legacy v1.5.0 fast path).
         self._schur_opt = options.pop('schur', False)
         self._schur_g_ss_solver = options.pop('schur_g_ss_solver', 'auto')
         self._schur_inner_tol = options.pop('schur_inner_tol', 1e-8)
         self._schur_inner_maxit = options.pop('schur_inner_maxit', 200)
+        self._schur_eps_form = options.pop('schur_eps_form', 'auto')
         self._schur_active = False
         self._shell_face_idx = None
         self._core_face_idx = None
@@ -209,6 +215,37 @@ class BEMRetIter(BEMIter):
                 nfaces = self.p.n if hasattr(self.p, 'n') else self.p.nfaces
                 self._shell_face_idx = shell_idx
                 self._core_face_idx = core_idx
+
+                # v1.6.0 (B-Schur): resolve eps_form.  'auto' picks 'operator'
+                # whenever ``_afun`` follows the β v1.5.1 operator-form path,
+                # i.e. eps1 OR eps2 is non-uniform within its region.  For
+                # uniform-eps (scalar) callers we keep the legacy 'pointwise'
+                # path so existing dense-LU probe behaviour is preserved.
+                eps_form = self._schur_eps_form
+                if eps_form == 'auto':
+                    eps1_nonuniform = (isinstance(self._eps1, np.ndarray)
+                            and self._eps1.ndim >= 1)
+                    eps2_nonuniform = (isinstance(self._eps2, np.ndarray)
+                            and self._eps2.ndim >= 1)
+                    eps_form = ('operator'
+                            if (eps1_nonuniform or eps2_nonuniform)
+                            else 'pointwise')
+
+                # Block-decomposed eps_diag (diagnostics; future preconditioning).
+                eps_diag = None
+                if eps_form == 'operator':
+                    def _block_eps(eps_val: Any, idx: np.ndarray) -> Any:
+                        if (np.isscalar(eps_val)
+                                or (isinstance(eps_val, np.ndarray) and eps_val.ndim == 0)):
+                            return eps_val
+                        return np.asarray(eps_val)[idx]
+                    eps_diag = {
+                        'shell_eps1': _block_eps(self._eps1, shell_idx),
+                        'core_eps1':  _block_eps(self._eps1, core_idx),
+                        'shell_eps2': _block_eps(self._eps2, shell_idx),
+                        'core_eps2':  _block_eps(self._eps2, core_idx),
+                    }
+
                 self._schur_op = SchurIterOperator(
                         self._afun,
                         shell_idx,
@@ -218,7 +255,9 @@ class BEMRetIter(BEMIter):
                         dtype = complex,
                         g_ss_solver = self._schur_g_ss_solver,
                         inner_tol = self._schur_inner_tol,
-                        inner_maxit = self._schur_inner_maxit)
+                        inner_maxit = self._schur_inner_maxit,
+                        eps_form = eps_form,
+                        eps_diag = eps_diag)
                 self._schur_active = True
 
         return self

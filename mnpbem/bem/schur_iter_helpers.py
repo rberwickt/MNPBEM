@@ -60,6 +60,13 @@ class SchurIterOperator(LinearOperator):
     # block-structured BEM matvec.  Combines with HMatrix-backed
     # Green functions because the full matvec ``A_full(x_full)``
     # is the only thing we ever ask of the upstream solver.
+    #
+    # v1.6.0 (B-Schur): added ``eps_form`` to communicate whether the
+    # upstream ``_afun`` uses operator-form eps (β v1.5.1 fix).  When
+    # ``eps_form='operator'``, the dense A_ss probe is bypassed in favor
+    # of an inner GMRES solver because the operator-form full matvec
+    # produces an A_ss whose dense probe is ill-conditioned for nonlocal
+    # cover-layer geometries.  See ``/tmp/b_schur_derivation.md``.
 
     def __init__(self,
             A_full_matvec: Callable[[np.ndarray], np.ndarray],
@@ -72,7 +79,9 @@ class SchurIterOperator(LinearOperator):
             inner_tol: float = 1e-8,
             inner_maxit: int = 200,
             g_ss_dense: Optional[np.ndarray] = None,
-            user_g_ss_solver: Optional[Callable[[np.ndarray], np.ndarray]] = None) -> None:
+            user_g_ss_solver: Optional[Callable[[np.ndarray], np.ndarray]] = None,
+            eps_form: str = 'pointwise',
+            eps_diag: Optional[Dict[str, Any]] = None) -> None:
 
         # ``g_ss_solver`` selects the strategy used to apply A_ss^{-1}:
         #     'lu_dense'    -- assemble A_ss as a dense block (probe with unit
@@ -84,10 +93,26 @@ class SchurIterOperator(LinearOperator):
         #                      when many outer iterations are required.
         #     'callable'    -- user supplied ``user_g_ss_solver`` (e.g. a
         #                      preconditioner from BEMRetIter._mfun).
-        #     'auto'        -- pick 'lu_dense' if the shell block is small
-        #                      (< 500 faces * components), otherwise 'gmres'.
+        #     'auto'        -- v1.6.0 ``eps_form='operator'`` always picks
+        #                      'gmres' (probe ill-conditioned).  Otherwise
+        #                      pick 'lu_dense' if the shell block is small
+        #                      (< 500 faces * components), else 'gmres'.
+        # ``eps_form`` (v1.6.0):
+        #     'pointwise'   -- legacy v1.5.0; upstream ``_afun`` applies eps
+        #                      after the Green matvec (uniform-eps fast path).
+        #     'operator'    -- β v1.5.1 ``_afun``: eps multiplied into σ
+        #                      *before* the Green matvec.  For nonlocal
+        #                      cover-layer geometries the dense probe of
+        #                      A_ss inherits a near-singular eps-weighted
+        #                      mixing — switch to inner GMRES instead.
+        # ``eps_diag``: optional block-decomposed per-face eps for diagnostics
+        #     and future analytical preconditioning.  Format:
+        #         {'shell': array_of_eps_for_shell_faces or scalar,
+        #          'core' : array_of_eps_for_core_faces  or scalar}
         assert g_ss_solver in {'auto', 'lu_dense', 'gmres', 'callable'}, \
                 '[error] g_ss_solver must be one of <auto|lu_dense|gmres|callable>, got <{}>'.format(g_ss_solver)
+        assert eps_form in {'pointwise', 'operator'}, \
+                '[error] eps_form must be one of <pointwise|operator>, got <{}>'.format(eps_form)
 
         self._A_full_matvec = A_full_matvec
         self._shell_face_idx = np.asarray(shell_face_indices, dtype = np.int64)
@@ -103,13 +128,20 @@ class SchurIterOperator(LinearOperator):
         self._n_core = self._core_idx.size
 
         self._dtype = np.dtype(dtype)
+        self._eps_form = eps_form
+        self._eps_diag = eps_diag
 
         # LinearOperator interface (acts on N_core sized vectors).
         super(SchurIterOperator, self).__init__(self._dtype, (self._n_core, self._n_core))
 
         # Resolve g_ss_solver strategy.
         if g_ss_solver == 'auto':
-            g_ss_solver = 'lu_dense' if self._n_shell < 500 else 'gmres'
+            if eps_form == 'operator':
+                # v1.6.0 (B-Schur): operator-form A_ss probe is ill-conditioned
+                # for nonlocal cover-layer; always inner-GMRES on this path.
+                g_ss_solver = 'gmres'
+            else:
+                g_ss_solver = 'lu_dense' if self._n_shell < 500 else 'gmres'
         self._g_ss_solver_kind = g_ss_solver
 
         self._inner_tol = float(inner_tol)
@@ -253,6 +285,8 @@ class SchurIterOperator(LinearOperator):
             'n_core_dof': int(self._n_core),
             'n_shell_dof': int(self._n_shell),
             'g_ss_solver': self._g_ss_solver_kind,
+            'eps_form': self._eps_form,
+            'has_eps_diag': self._eps_diag is not None,
         }
 
 
