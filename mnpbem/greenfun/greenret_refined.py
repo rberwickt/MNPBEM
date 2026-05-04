@@ -130,6 +130,12 @@ class GreenRetRefined(object):
         2. Use quadpol() for polar integration
         3. For each order n: g_n = ∫ r^(n-1) / n! dA
         4. For derivatives: f_n = ∫ (n-1) × (n·r) × r^(n-3) / n! dA
+
+        v1.6.1: Vectorised across faces using a single (n_diag, n_pts_per_face)
+        broadcast.  quadpol returns a uniform number of integration points per
+        face on the standard particle meshes used by BEM, so the per-face
+        Python loop collapses to a few numpy reductions.  Falls back to the
+        per-face path when integration points are non-uniform.
         """
         # Find diagonal elements (MATLAB line 47)
         diag_mask = ir.toarray() == 2
@@ -159,7 +165,89 @@ class GreenRetRefined(object):
         pos1 = self.p1.pos[face_idx]  # (n_diag, 3)
         nvec1 = self.p1.nvec[face_idx]  # (n_diag, 3)
 
-        # Process each diagonal face
+        n_diag = len(face_idx)
+
+        # ---------------- v1.6.1 vectorised batched path ----------------
+        # quadpol returns uniform per-face point counts on the standard
+        # particle meshes used by BEM (56 / 192 points).  When that holds
+        # we can reshape the (n_total, 3) integration arrays to
+        # (n_diag, n_pts, 3) and replace the per-face Python loop with a
+        # single numpy reduction.  When non-uniform we fall back to the
+        # original per-face path.
+        if n_diag > 0:
+            counts = np.bincount(row_indices, minlength = n_diag)[:n_diag]
+        else:
+            counts = np.zeros(0, dtype = np.int64)
+        uniform = counts.size > 0 and int(counts.min()) == int(counts.max())
+
+        if uniform and counts[0] > 0:
+            n_pts = int(counts[0])
+
+            # Sort points by face so each face occupies a contiguous block.
+            # quadpol's emission order is already face-by-face, but we sort
+            # defensively.
+            order_perm = np.argsort(row_indices, kind = 'stable')
+            pos_sorted = np.ascontiguousarray(pos[order_perm], dtype = np.float64)
+            w_sorted = np.ascontiguousarray(weight[order_perm], dtype = np.float64)
+            pos_2d = pos_sorted.reshape(n_diag, n_pts, 3)
+            w_2d = w_sorted.reshape(n_diag, n_pts)
+
+            vec = pos1[:, np.newaxis, :] - pos_2d                # (n_diag, n_pts, 3)
+            r = np.sqrt((vec * vec).sum(axis = 2))               # (n_diag, n_pts)
+            r = np.maximum(r, np.finfo(float).eps)
+            n_dot_r = np.einsum('ij,ikj->ik', nvec1, vec)        # (n_diag, n_pts)
+
+            inv_r = 1.0 / r
+            inv_r2 = inv_r * inv_r
+            inv_r3 = inv_r * inv_r2
+
+            # Incremental powers: r_pow_nm1 tracks r^(n-1), r_pow_nm3 tracks r^(n-3).
+            # At n=0 these are r^-1 and r^-3 respectively.
+            r_pow_nm1 = inv_r.copy()
+            r_pow_nm3 = inv_r3.copy()
+
+            for n in range(self.order + 1):
+                self.g[iface, n] = (
+                    (w_2d * r_pow_nm1).sum(axis = 1)
+                ) / math.factorial(n)
+                if self.deriv == 'norm':
+                    self.f[iface, n] = (
+                        w_2d * (n - 1) * n_dot_r * r_pow_nm3
+                    ).sum(axis = 1) / math.factorial(n)
+                r_pow_nm1 = r_pow_nm1 * r
+                r_pow_nm3 = r_pow_nm3 * r
+
+            if self.deriv == 'cart':
+                rr_max = r.max(axis = 1)                          # (n_diag,)
+                rr = np.maximum(r, 1e-4 * rr_max[:, np.newaxis])
+                inv_rr3 = 1.0 / (rr * rr * rr)
+                tvec1 = self.p1.tvec1[face_idx]                    # (n_diag, 3)
+                tvec2 = self.p1.tvec2[face_idx]                    # (n_diag, 3)
+                in1 = np.einsum('ij,ikj->ik', tvec1, vec)
+                in2 = np.einsum('ij,ikj->ik', tvec2, vec)
+
+                r_pow_nm3_c = inv_r3.copy()
+                r_pow_n_c = np.ones_like(r)
+                for n in range(self.order + 1):
+                    f1 = (
+                        w_2d * (n - 1) * n_dot_r * r_pow_nm3_c
+                    ).sum(axis = 1) / math.factorial(n)
+                    f2 = (
+                        w_2d * (n - 1) * in1 * r_pow_n_c * inv_rr3
+                    ).sum(axis = 1) / math.factorial(n)
+                    f3 = (
+                        w_2d * (n - 1) * in2 * r_pow_n_c * inv_rr3
+                    ).sum(axis = 1) / math.factorial(n)
+                    self.f[iface, :, n] = (
+                        nvec1 * f1[:, np.newaxis] +
+                        tvec1 * f2[:, np.newaxis] +
+                        tvec2 * f3[:, np.newaxis]
+                    )
+                    r_pow_nm3_c = r_pow_nm3_c * r
+                    r_pow_n_c = r_pow_n_c * r
+            return
+
+        # -------- Fallback: per-face Python loop (non-uniform meshes) ----
         for i, (face, face2, iref) in enumerate(zip(face_idx, face2_idx, iface)):
             # Get integration points for this face
             # row_indices contains the index into face2_idx, not face2_idx itself
@@ -208,6 +296,13 @@ class GreenRetRefined(object):
         3. For each order n: g_n = ∫ (r-r0)^n / (r × n!) dA
            where r0 is distance to face centroid
         4. For derivatives: Similar but with directional factors
+
+        v1.6.1: Per-face Python loop replaced by a single batched numpy
+        reduction over a flat (pair, n_pts) layout.  When `quad()` returns
+        a uniform number of integration points per face (the typical mesh
+        case for tricube / sphere / shape primitives) we collapse the
+        whole loop into a few numpy operations; otherwise we fall back to
+        the original CSR per-face path.
         """
         # Faces to be refined (columns with any ir==1) (MATLAB line 100)
         ir_array = ir.toarray()
@@ -235,6 +330,126 @@ class GreenRetRefined(object):
         # Create mapping from (row, col) to refinement index
         refine_map = {(r, c): i for i, (r, c) in enumerate(zip(self.row, self.col))}
 
+        # ---------------- v1.6.1 batched vectorised path ----------------
+        n_face = len(reface)
+        counts = np.bincount(row_indices, minlength = n_face)[:n_face]
+        uniform = counts.size > 0 and int(counts.min()) == int(counts.max())
+        if uniform and counts[0] > 0:
+            n_pts = int(counts[0])
+
+            # Sort points by face so each face owns a contiguous block.
+            order_perm = np.argsort(row_indices, kind = 'stable')
+            pos_sorted = np.ascontiguousarray(pos_all[order_perm], dtype = np.float64)
+            pos_2d = pos_sorted.reshape(n_face, n_pts, 3)        # (n_face, n_pts, 3)
+
+            # Build per-face w_face arrays from the sparse weights.
+            # The sparse layout has w_sparse[i, :] non-zero exactly at the
+            # integration points of face i, in the same column ordering
+            # as `pos_all[row_indices == i]`.
+            w_csr = w_sparse.tocsr() if hasattr(w_sparse, 'tocsr') else w_sparse
+            w_2d = np.zeros((n_face, n_pts), dtype = np.float64)
+            indptr = w_csr.indptr
+            indices = w_csr.indices
+            data = w_csr.data
+            for i in range(n_face):
+                rs, re = int(indptr[i]), int(indptr[i + 1])
+                if re == rs:
+                    continue
+                w_row = data[rs:re]
+                # Drop zero-weight slots to match the original w[w!=0] filter.
+                nz = w_row > 0
+                if not np.all(nz):
+                    w_row = w_row[nz]
+                # Defensive: truncate / pad to n_pts (matches sorted_pos size).
+                k = min(len(w_row), n_pts)
+                w_2d[i, :k] = w_row[:k]
+
+            # Build flat (face_idx, nb) pair list across all faces.
+            # Use ir_array[:, reface] to vectorise the np.where over columns.
+            nb_mask = ir_array[:, reface] == 1                   # (n_total, n_face)
+            nb_rows, face_cols = np.where(nb_mask)               # both 1-D
+            n_pairs = nb_rows.size
+
+            if n_pairs > 0:
+                # Refinement index per (nb_row, reface[face_col]) pair.
+                # Vectorise via the existing refine_map lookup.
+                iref = np.empty(n_pairs, dtype = np.int64)
+                for k in range(n_pairs):
+                    iref[k] = refine_map[(int(nb_rows[k]), int(reface[face_cols[k]]))]
+
+                # Per-pair source data (broadcast over n_pts).
+                pos_src = pos1[nb_rows]                           # (n_pairs, 3)
+                nvec_src = nvec1[nb_rows]                         # (n_pairs, 3)
+                pos_face_pair = pos_2d[face_cols]                 # (n_pairs, n_pts, 3)
+                w_face_pair = w_2d[face_cols]                     # (n_pairs, n_pts)
+
+                # Difference vectors and distances (MATLAB lines 133-137)
+                rvec = pos_src[:, np.newaxis, :] - pos_face_pair  # (n_pairs, n_pts, 3)
+                x = rvec[..., 0]
+                y = rvec[..., 1]
+                z = rvec[..., 2]
+                r = np.sqrt((rvec * rvec).sum(axis = 2))
+                r = np.maximum(r, np.finfo(float).eps)
+
+                # Distance from face centroids (MATLAB lines 140-142)
+                vec0 = self.p2.pos[reface[face_cols]] - pos_src   # (n_pairs, 3)
+                r0 = np.sqrt((vec0 * vec0).sum(axis = 1))         # (n_pairs,)
+                delta = r - r0[:, np.newaxis]                     # (n_pairs, n_pts)
+
+                inv_r = 1.0 / r
+                inv_r2 = inv_r * inv_r
+                inv_r3 = inv_r2 * inv_r
+
+                n_dot_r = (
+                    nvec_src[:, 0:1] * x +
+                    nvec_src[:, 1:2] * y +
+                    nvec_src[:, 2:3] * z
+                )
+
+                # Green function expansion (MATLAB lines 145-148)
+                # Maintain delta_pow incrementally to avoid `**n` blow-up.
+                delta_pow_n = np.ones_like(r)                     # delta^n at n=0
+                delta_pow_nm1 = np.zeros_like(r)                  # delta^(n-1) (irrelevant at n=0)
+
+                for n in range(self.order + 1):
+                    integrand = delta_pow_n * inv_r / math.factorial(n)
+                    self.g[iref, n] = (integrand * w_face_pair).sum(axis = 1)
+                    delta_pow_nm1 = delta_pow_n
+                    delta_pow_n = delta_pow_n * delta
+
+                if self.deriv == 'norm':
+                    # f_0 = -(n_dot_r / r^3) @ w
+                    self.f[iref, 0] = -(n_dot_r * inv_r3 * w_face_pair).sum(axis = 1)
+                    delta_pow_n = delta.copy()                    # delta^1 at n=1
+                    delta_pow_nm1 = np.ones_like(r)               # delta^0 at n=1
+                    for n in range(1, self.order + 1):
+                        term1 = -delta_pow_n * inv_r3 / math.factorial(n)
+                        term2 = delta_pow_nm1 * inv_r2 / math.factorial(n - 1)
+                        self.f[iref, n] = (
+                            n_dot_r * (term1 + term2) * w_face_pair
+                        ).sum(axis = 1)
+                        delta_pow_nm1 = delta_pow_n
+                        delta_pow_n = delta_pow_n * delta
+                else:
+                    # deriv='cart': MATLAB init.m lines 165-175
+                    f_scalar0 = -inv_r3
+                    self.f[iref, 0, 0] = (x * f_scalar0 * w_face_pair).sum(axis = 1)
+                    self.f[iref, 1, 0] = (y * f_scalar0 * w_face_pair).sum(axis = 1)
+                    self.f[iref, 2, 0] = (z * f_scalar0 * w_face_pair).sum(axis = 1)
+                    delta_pow_n = delta.copy()
+                    delta_pow_nm1 = np.ones_like(r)
+                    for n in range(1, self.order + 1):
+                        term1 = -delta_pow_n * inv_r3 / math.factorial(n)
+                        term2 = delta_pow_nm1 * inv_r2 / math.factorial(n - 1)
+                        f_scalar = term1 + term2
+                        self.f[iref, 0, n] = (x * f_scalar * w_face_pair).sum(axis = 1)
+                        self.f[iref, 1, n] = (y * f_scalar * w_face_pair).sum(axis = 1)
+                        self.f[iref, 2, n] = (z * f_scalar * w_face_pair).sum(axis = 1)
+                        delta_pow_nm1 = delta_pow_n
+                        delta_pow_n = delta_pow_n * delta
+            return
+
+        # -------- Fallback: per-face Python loop (non-uniform meshes) ----
         # Process each face to be refined (MATLAB line 116)
         for face_idx, face in enumerate(reface):
             # Find neighbor faces that need refinement for this face
