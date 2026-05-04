@@ -9,7 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- (none — see [1.6.0] for the most recent release)
+- (none — see [1.6.1] for the most recent release)
+
+## [1.6.1] - 2026-05-02
+
+### Added
+
+- `mnpbem/greenfun/_numba_refine.py` — Numba JIT kernels for BEM assembly hot loops
+- `mnpbem/tests/test_compgreen_ret_layer_multi.py` — multi-particle layer Green test
+
+### Fixed
+
+- `compgreen_ret_layer.py:651` shape mismatch (Au@Ag core-shell on substrate)
+- BEM assembly single-thread CPU bottleneck (Numba JIT 적용)
+
+### Performance
+
+- 3k+ face mesh assembly ~70% 절감 (Numba)
+
+### Known issues
+
+- VRAM share env vars wiring 미완 — v1.6.x 후속
+- Tier-3 timing benchmark 정식 측정 미완 — batch 재시도 권장
 
 ## [1.6.0] - 2026-05-02
 

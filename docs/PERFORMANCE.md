@@ -499,6 +499,15 @@ MATLAB reference 가 저장소에 부재 — 사용자 측에서 MATLAB run 후
 
 (Tier-3 정식 timing 은 BEM assembly perf fix 후 batch 재측정 예정)
 
+### 11.6 v1.6.1 — assembly Numba JIT
+
+| 케이스 | v1.6.0 | v1.6.1 | 효과 |
+|---|---|---|---|
+| 3k face assembly (1 wl) | (single thread CPU bound) | (Numba JIT) | ~70% 절감 estimate |
+| Au@Ag core-shell on substrate | shape mismatch (block) | OK | 사용자 use case 확장 |
+
+(정식 wall time 측정은 v1.6.x batch benchmark 후속)
+
 ---
 
 ## 12. 변경 이력
@@ -512,3 +521,4 @@ MATLAB reference 가 저장소에 부재 — 사용자 측에서 MATLAB run 후
 | 2026-05-02 | 1.5.0 | §9.2 Known limits 의 GMRES stall / `BEM*Iter + Schur` 한계 해소 표기, §11.4 v1.5.0 preconditioner / Schur×Iter benchmark 추가 (256-face 55× iter 감소, 568-face 21.3% 절감) |
 | 2026-05-03 | 1.5.0 | §11.4 Primary acceptance 추가 (Au@Ag dimer 4nm shell + 0.6 nm gap, 12672 faces, jk-config 사용자 case 통과) |
 | 2026-05-02 | 1.6.0 | §11.5 v1.6.0 benchmark 추가 (B-Schur 60-face hang→6:51 수렴, BEM assembly perf 후속 명시) |
+| 2026-05-02 | 1.6.1 | §11.6 v1.6.1 — BEM assembly Numba JIT (~70% estimate), compgreen_ret_layer multi-particle indexing fix |
