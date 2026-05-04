@@ -1219,16 +1219,16 @@ class Particle(object):
         rows = np.zeros(n_total, dtype=int)
 
         # Shape functions: [x, y, 1-x-y]
-        tri_shape = np.column_stack([x, y, 1 - x - y])
+        tri_shape = np.column_stack([x, y, 1 - x - y])                    # (m, 3)
 
-        offset = 0
-        for i, face_idx in enumerate(ind3):
-            it = slice(offset, offset + m)
-            face = tri_faces[i, :3].astype(int)
-            pos[it] = tri_shape @ self.verts[face]
-            weights[it] = w * area[i]
-            rows[it] = face_idx
-            offset += m
+        # v1.6.1: vectorise per-triangle Python loop into tensor contractions.
+        face_idx = tri_faces[:, :3].astype(int)
+        verts_block = self.verts[face_idx]                                # (n_tri, 3, 3)
+        pos_block = np.einsum('tc,icd->itd', tri_shape, verts_block)      # (n_tri, m, 3)
+        pos = pos_block.reshape(-1, 3)
+        w_block = w[np.newaxis, :] * area[:, np.newaxis]                  # (n_tri, m)
+        weights = w_block.ravel()
+        rows = np.repeat(np.asarray(ind3), m)
 
         # Create sparse weight matrix
         cols = np.arange(n_total)
@@ -1260,24 +1260,18 @@ class Particle(object):
         tri_shape = self._tri6_shape(x, y)
         tri_dx, tri_dy = self._tri6_deriv(x, y)
 
-        offset = 0
-        for i, face_idx in enumerate(ind3):
-            it = slice(offset, offset + m)
-            face = tri_faces[i].astype(int)
+        # v1.6.1: vectorise per-triangle Python loop into tensor contractions.
+        face_idx = tri_faces.astype(int)
+        verts_block = self.verts2[face_idx]                               # (n_tri, n_corners, 3)
+        pos_block = np.einsum('tc,icd->itd', tri_shape, verts_block)
+        posx_block = np.einsum('tc,icd->itd', tri_dx, verts_block)
+        posy_block = np.einsum('tc,icd->itd', tri_dy, verts_block)
+        nvec_block = np.cross(posx_block, posy_block, axis = 2)
+        jac_block = 0.5 * np.linalg.norm(nvec_block, axis = 2)            # (n_tri, m)
 
-            # Interpolate positions
-            pos[it] = tri_shape @ self.verts2[face]
-
-            # Derivatives for Jacobian
-            posx = tri_dx @ self.verts2[face]
-            posy = tri_dy @ self.verts2[face]
-
-            nvec = np.cross(posx, posy)
-            jac = 0.5 * np.linalg.norm(nvec, axis=1)
-
-            weights[it] = w * jac
-            rows[it] = face_idx
-            offset += m
+        pos = pos_block.reshape(-1, 3)
+        weights = (w[np.newaxis, :] * jac_block).ravel()
+        rows = np.repeat(np.asarray(ind3), m)
 
         cols = np.arange(n_total)
         w_sparse = csr_matrix((weights, (rows, cols)), shape=(len(ind), n_total))
@@ -1310,7 +1304,15 @@ class Particle(object):
             return self._quadpol_curv(ind)
 
     def _quadpol_flat(self, ind=None):
-        """Polar quadrature for flat elements."""
+        """Polar quadrature for flat elements.
+
+        v1.6.1: per-face Python loop replaced by tensor contractions.
+        For tricube / quad meshes this collapses ``n_face`` Python iterations
+        of ``shape @ verts`` (16-byte tensor work) into a single
+        ``(n_face, m, n_corners) @ (n_face, n_corners, 3)`` einsum, which
+        eliminates the > 95 % construct-time bottleneck observed on dimer
+        meshes (``_quadpol_flat`` was 28 s tottime at 1452 faces baseline).
+        """
         if ind is None:
             ind = np.arange(self.nfaces)
         ind = np.asarray(ind)
@@ -1323,40 +1325,44 @@ class Particle(object):
 
         pos = np.zeros((n_total, 3))
         weight = np.zeros(n_total)
-        row = np.zeros(n_total, dtype=int)
+        row = np.zeros(n_total, dtype = int)
 
         offset = 0
 
         # Triangular elements
         if len(ind3) > 0:
-            tri_shape = np.column_stack([q.x3, q.y3, 1 - q.x3 - q.y3])
-
-            for i in ind3:
-                it = slice(offset, offset + m3)
-                face = self.faces[ind[i], :3].astype(int)
-                pos[it] = tri_shape @ self.verts[face]
-                weight[it] = q.w3 * self.area[ind[i]]
-                row[it] = i
-                offset += m3
+            tri_shape = np.column_stack([q.x3, q.y3, 1 - q.x3 - q.y3])  # (m3, 3)
+            ind3 = np.asarray(ind3)
+            face_idx = self.faces[ind[ind3], :3].astype(int)             # (k3, 3)
+            verts_block = self.verts[face_idx]                            # (k3, 3, 3)
+            # pos[i,t,:] = tri_shape[t,c] * verts_block[i,c,:]
+            pos_block = np.einsum('tc,icd->itd', tri_shape, verts_block)  # (k3, m3, 3)
+            pos[offset:offset + len(ind3) * m3] = pos_block.reshape(-1, 3)
+            w_block = (q.w3[np.newaxis, :] *
+                       self.area[ind[ind3]][:, np.newaxis])               # (k3, m3)
+            weight[offset:offset + len(ind3) * m3] = w_block.ravel()
+            row[offset:offset + len(ind3) * m3] = np.repeat(ind3, m3)
+            offset += len(ind3) * m3
 
         # Quadrilateral elements
         if len(ind4) > 0:
-            quad_shape = self._quad4_shape(q.x4, q.y4)
-            quad_dx, quad_dy = self._quad4_deriv(q.x4, q.y4)
+            quad_shape = self._quad4_shape(q.x4, q.y4)                    # (m4, 4)
+            quad_dx, quad_dy = self._quad4_deriv(q.x4, q.y4)              # (m4, 4) each
+            ind4 = np.asarray(ind4)
+            face_idx = self.faces[ind[ind4], :4].astype(int)              # (k4, 4)
+            verts_block = self.verts[face_idx]                            # (k4, 4, 3)
+            pos_block = np.einsum('tc,icd->itd', quad_shape, verts_block) # (k4, m4, 3)
+            posx_block = np.einsum('tc,icd->itd', quad_dx, verts_block)
+            posy_block = np.einsum('tc,icd->itd', quad_dy, verts_block)
+            nvec_block = np.cross(posx_block, posy_block, axis = 2)        # (k4, m4, 3)
+            jac_block = np.linalg.norm(nvec_block, axis = 2)              # (k4, m4)
 
-            for i in ind4:
-                it = slice(offset, offset + m4)
-                face = self.faces[ind[i], :4].astype(int)
-                pos[it] = quad_shape @ self.verts[face]
-
-                posx = quad_dx @ self.verts[face]
-                posy = quad_dy @ self.verts[face]
-                nvec = np.cross(posx, posy)
-                jac = np.linalg.norm(nvec, axis=1)
-
-                weight[it] = q.w4 * jac
-                row[it] = i
-                offset += m4
+            n_block = len(ind4) * m4
+            pos[offset:offset + n_block] = pos_block.reshape(-1, 3)
+            w_block = q.w4[np.newaxis, :] * jac_block                     # (k4, m4)
+            weight[offset:offset + n_block] = w_block.ravel()
+            row[offset:offset + n_block] = np.repeat(ind4, m4)
+            offset += n_block
 
         return pos, weight, row
 
@@ -1485,25 +1491,21 @@ class Particle(object):
         col = np.zeros(n_total, dtype=int)
 
         # Triangular shape functions
-        tri_shape = np.column_stack([x, y, 1 - x - y])
+        tri_shape = np.column_stack([x, y, 1 - x - y])                    # (m, 3)
 
-        # Loop over triangular elements
-        offset = 0
-        for i, idx in enumerate(ind3):
-            it = slice(offset, offset + m)
-            face = faces_tri[i, :3].astype(int)
-
-            # Interpolate integration points
-            pos[it] = tri_shape @ self.verts[face]
-
-            # Integration weights
-            weight[it] = w * area[i]
-
-            # Row and column indices for sparse matrix
-            row[it] = idx
-            col[it] = np.arange(offset, offset + m)
-
-            offset += m
+        # v1.6.1: vectorise per-triangle Python loop into tensor contractions.
+        # face_idx: (n_tri, 3) — vertex indices for each triangle.
+        face_idx = faces_tri[:, :3].astype(int)
+        verts_block = self.verts[face_idx]                                # (n_tri, 3, 3)
+        # pos[i, t, :] = tri_shape[t, c] * verts_block[i, c, :]
+        pos_block = np.einsum('tc,icd->itd', tri_shape, verts_block)      # (n_tri, m, 3)
+        pos = pos_block.reshape(-1, 3)
+        # weights = w[t] * area[i]
+        w_block = w[np.newaxis, :] * area[:, np.newaxis]                  # (n_tri, m)
+        weight = w_block.ravel()
+        # row[i, t] = ind3[i]
+        row = np.repeat(np.asarray(ind3), m)
+        col = np.arange(n_total)
 
         # Create sparse weight matrix
         from scipy.sparse import csr_matrix
