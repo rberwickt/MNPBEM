@@ -526,6 +526,21 @@ os.environ['MNPBEM_VRAM_SHARE_GPUS'] = '4'  # v1.2.0
 - `BEMStatIter` tree mode 는 diagonal term 깨짐으로 자동 dense
   fallback (one-time log).
 
+### 22. mesh_density 우선 (v1.6.0)
+
+이전 (v1.5.x): `n_per_edge` 가 explicit 명시 시 그대로 사용.
+v1.6.0+: **`mesh_density` 가 우선** (mnpbem_simulation 의미체계 통일).
+
+```python
+# yaml 에 둘 다 있으면 mesh_density 우선
+structure:
+  core_size: 47
+  mesh_density: 2     # 우선 사용 → core size 기준 n_per_edge=24
+  n_per_edge: 24      # 무시 (mesh_density 가 결정)
+```
+
+backward-compat: `n_per_edge` 만 있는 yaml 은 그대로 사용.
+
 ---
 
 ## What does **not** map cleanly

@@ -211,4 +211,8 @@
 - `docs/RELEASE_NOTES_v1.2.0.md` (v1.2.0 git tag 메시지)
 - `docs/RELEASE_NOTES_v1.3.0.md` (v1.3.0 git tag 메시지)
 - `docs/RELEASE_NOTES_v1.4.0.md` (v1.4.0 git tag 메시지)
+- `docs/RELEASE_NOTES_v1.5.0.md` (v1.5.0 git tag 메시지)
+- `docs/RELEASE_NOTES_v1.5.1.md` (v1.5.1 git tag 메시지)
+- `docs/RELEASE_NOTES_v1.5.2.md` (v1.5.2 git tag 메시지)
+- `docs/RELEASE_NOTES_v1.6.0.md` (v1.6.0 git tag 메시지)
 - `docs/INSTALL.md` (v1.4.0 — 시나리오별 install 가이드)

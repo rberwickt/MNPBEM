@@ -9,7 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- (none — see [1.5.2] for the most recent release)
+- (none — see [1.6.0] for the most recent release)
+
+## [1.6.0] - 2026-05-02
+
+### Added
+
+- `BEMRetIter` `schur_eps_form='auto'` 옵션 — non-uniform eps 자동 감지
+- `SchurIterOperator` `eps_form='pointwise'|'operator'` 분기 + threshold 4096
+- `BEMRetLayerIter` operator-form (substrate + iter + multi-material)
+- pymnpbem `--str-conf <X.py> --sim-conf <Y.py> --verbose` CLI
+- pymnpbem `mesh_density` (nm) 우선 (n_per_edge 보다)
+- 신규 tests: test_b_schur, test_iter_convergence_layer, test_mesh_density_priority, test_cli_str_sim
+
+### Fixed
+
+- 60-face nonlocal+schur+iter+hmat 25 min GMRES hang → 6:51 수렴
+- BEMRetLayerIter multi-material drift (Au+Ag dimer on glass)
+
+### Performance
+
+- (perf 측정값은 PERFORMANCE.md §11.5)
+
+### Known limits / Deferred
+
+- BEM assembly perf (single-thread CPU bound) — v1.6.x 후속
+- compgreen_ret_layer multi-particle indexing — v1.6.x 후속
 
 ## [1.5.2] - 2026-05-02
 

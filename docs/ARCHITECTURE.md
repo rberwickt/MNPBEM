@@ -491,6 +491,27 @@ preconditioner 가 필요했고, "cover layer 가 추가된 8N×8N 시스템"
   하므로 H-matrix 와 호환 X. `SchurIterOperator` 는 *full matvec
   A·v* 만 사용해 H-matrix 와 자연스럽게 맞물린다.
 
+### 3.16 v1.6.0 — B-Schur full coverage + BEMRetLayerIter operator-form + CLI
+
+#### B-Schur (mnpbem/bem/schur_iter_helpers.py)
+
+`SchurIterOperator` 가 `eps_form='operator'` 시 inner GMRES 부담 회피 위해
+`g_ss_solver='auto'` 의 lu_dense threshold 를 500 → 4096 으로 상향. dense LU
+probe 가 N=4096 (≈128 MB at complex128) 까지 효율적.
+
+수학: Schur reduction 자체는 `A_full` 에 무관하게 정확. 통찰 — operator-form
+Schur 재구현 불필요. inner GMRES 비용이 진짜 bottleneck.
+
+#### BEMRetLayerIter (mnpbem/bem/bem_ret_layer_iter.py)
+
+`_afun / _init_precond / _mfun` 모두 operator-form 적용 (β v1.5.1 패턴 동일).
+substrate + iter + multi-material 케이스 drift 해결.
+
+#### pymnpbem CLI (cli.py)
+
+`--str-conf <X.py> --sim-conf <Y.py> --verbose` 패턴 (mnpbem_simulation 호환).
+sim_conf 의 nested compute 블록에 모든 worker/GPU 파라미터.
+
 ## 4. Performance summary
 
 See `docs/PERFORMANCE.md` for the numbers. The strategy is documented in

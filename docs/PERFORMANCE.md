@@ -489,6 +489,16 @@ MATLAB reference 가 저장소에 부재 — 사용자 측에서 MATLAB run 후
 회귀: `mnpbem/tests/test_preconditioner.py`,
 `mnpbem/tests/test_schur_iter.py`.
 
+### 11.5 v1.6.0 benchmark
+
+| 케이스 | v1.5.2 | v1.6.0 | 개선 |
+|---|---|---|---|
+| 60-face nonlocal+schur+iter+hmat | 25 min hang | 6:51 PASS | 수렴 확보 |
+| Au@Ag dimer 12672 face VRAM share 4 GPU | OK (acceptance) | OK (회귀 X) | 유지 |
+| BEM assembly (12672 face) | (single thread CPU) | (single thread CPU) | v1.6.x 후속 |
+
+(Tier-3 정식 timing 은 BEM assembly perf fix 후 batch 재측정 예정)
+
 ---
 
 ## 12. 변경 이력
@@ -501,3 +511,4 @@ MATLAB reference 가 저장소에 부재 — 사용자 측에서 MATLAB run 후
 | 2026-05-02 | 1.3.0 | §11 Large-mesh benchmark 5k / 10k 실측 결과 채움 (ε agent), 25k 는 timeout placeholder 유지 |
 | 2026-05-02 | 1.5.0 | §9.2 Known limits 의 GMRES stall / `BEM*Iter + Schur` 한계 해소 표기, §11.4 v1.5.0 preconditioner / Schur×Iter benchmark 추가 (256-face 55× iter 감소, 568-face 21.3% 절감) |
 | 2026-05-03 | 1.5.0 | §11.4 Primary acceptance 추가 (Au@Ag dimer 4nm shell + 0.6 nm gap, 12672 faces, jk-config 사용자 case 통과) |
+| 2026-05-02 | 1.6.0 | §11.5 v1.6.0 benchmark 추가 (B-Schur 60-face hang→6:51 수렴, BEM assembly perf 후속 명시) |
