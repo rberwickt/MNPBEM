@@ -9,7 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- (none — see [1.6.1] for the most recent release)
+- (none — see [1.6.2] for the most recent release)
+
+## [1.6.2] - 2026-05-02
+
+### Fixed
+
+- **VRAM share env vars wiring** (C agent v1.6.0/v1.6.1 Tier-3 benchmark 발견):
+  `MNPBEM_VRAM_SHARE_GPUS=N` + `MNPBEM_VRAM_SHARE_BACKEND=cusolvermg`
+  set 되어도 BEM solver (`bem_ret_iter.py`, `bem_stat_layer.py`,
+  `bem_ret_layer.py` 등) 가 `lu_factor_dispatch` 호출 시 `n_gpus` kwarg
+  명시 전달 안 함 → cuSolverMg 활성화 실패, 12672-face dense LU 가
+  49 GB single-GPU OOM. fix:
+  - `mnpbem/utils/gpu.py::_vram_share_env_defaults()` 헬퍼 신설
+  - `lu_factor_dispatch` / `solve_dispatch` 가 `n_gpus` / `backend` /
+    `device_ids` kwarg 미지정 시 env vars (`MNPBEM_VRAM_SHARE_GPUS`,
+    `MNPBEM_VRAM_SHARE_BACKEND`, `MNPBEM_VRAM_SHARE_DEVICE_IDS`) 자동
+    읽음. 명시 kwarg 가 항상 우선.
+  - `MNPBEM_VRAM_SHARE_DEVICE_IDS` (comma-separated) 신규 지원
+  - `MNPBEM_VRAM_SHARE=0` master switch 로 강제 비활성 가능
+  - 기존 `bem_ret.py::_vram_share_lu_kwargs` 명시 전달 경로와 호환
+    (kwarg 우선이므로 동작 변경 X)
+
+### Added
+
+- `mnpbem/tests/test_vram_share_env_wiring.py` (15 tests, mock cuSolverMg
+  backend로 CPU-only host 에서도 dispatch 라우팅 검증)
+
+### Verified
+
+- 4× RTX A6000 smoke: `MNPBEM_VRAM_SHARE_GPUS=2` 환경변수만으로 256×256
+  complex LU `lu_factor_dispatch` → mgpu 분기 진입, residual 9.3e-16
+
+### Known issues
+
+- Tier-3 12672-face cuSolverMg 정식 batch benchmark 미수행 (M5+ 후속)
 
 ## [1.6.1] - 2026-05-02
 
