@@ -549,8 +549,17 @@ class DipoleRetLayer(object):
         g = CompGreenRetLayer(self.pt, sig.p, self.layer, **g_opts)
 
         # MATLAB: e = field(g, sig) + field(obj, obj.dip.pt, sig.enei, 'refl')
+        # A5 fix: materialize cupy sig members on host before invoking Green
+        # function so numpy matmul does not raise on a cupy operand.
+        for _name in ('sig1', 'sig2', 'h1', 'h2'):
+            if hasattr(sig, _name):
+                _val = getattr(sig, _name)
+                if hasattr(_val, 'get') and not isinstance(_val, np.ndarray):
+                    setattr(sig, _name, _val.get())
         field_struct = g.field(sig)
-        e_field = field_struct.e  # (npt, 3, npt*ndip)
+        _e_raw = field_struct.e
+        e_field = (_e_raw.get() if (hasattr(_e_raw, 'get')
+            and not isinstance(_e_raw, np.ndarray)) else np.asarray(_e_raw))  # (npt, 3, npt*ndip)
         # Reshape to (npt, 3, npt, ndip) to match reflected field shape
         if e_field.ndim == 3:
             e_field = e_field.reshape(npt, 3, npt, ndip)
