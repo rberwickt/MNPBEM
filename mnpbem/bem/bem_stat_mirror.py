@@ -137,6 +137,10 @@ class BEMStatMirror(object):
 
             sig_val = _lu_solve_multi(self.mat_lu[ind], exc.val[i].phip)
 
+            # v1.7 Phase 1.4: host-materialize for user-facing access.
+            if is_cupy_array(sig_val):
+                sig_val = to_host(sig_val)
+
             val = CompStruct(self.p, exc.enei, sig = sig_val)
             val.symval = exc.val[i].symval
             sig.val.append(val)

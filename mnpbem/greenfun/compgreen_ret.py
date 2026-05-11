@@ -848,6 +848,14 @@ class CompGreenRet(object):
 
         MATLAB: Misc/matmul.m
         """
+        # v1.7 fix: accept cupy ndarrays.  Promote host-only sentinels so the
+        # ``isinstance(a, np.ndarray)`` checks no longer reject cupy arrays.
+        from ..utils.gpu import to_host as _to_host
+        if hasattr(a, 'get') and not isinstance(a, np.ndarray):
+            a = _to_host(a)
+        if hasattr(x, 'get') and not isinstance(x, np.ndarray):
+            x = _to_host(x)
+
         if np.isscalar(a) or (isinstance(a, np.ndarray) and a.size == 1):
             if a == 0:
                 return 0
@@ -901,6 +909,13 @@ class CompGreenRet(object):
         For G of shape (n1, 3, n2) and h of shape (n2, 3, ...),
         compute cross product.
         """
+        # v1.7 fix: host-promote cupy operands before the ndarray check.
+        from ..utils.gpu import to_host as _to_host
+        if hasattr(G, 'get') and not isinstance(G, np.ndarray):
+            G = _to_host(G)
+        if hasattr(h, 'get') and not isinstance(h, np.ndarray):
+            h = _to_host(h)
+
         if not isinstance(G, np.ndarray) or G.size == 1:
             return 0
 

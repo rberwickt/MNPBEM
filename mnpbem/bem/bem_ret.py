@@ -1130,6 +1130,20 @@ class BEMRet(object):
             h2_all = _ls(G2_lu, h2)
 
         # MATLAB: sig = compstruct(obj.p, exc.enei, 'sig1', sig1, 'sig2', sig2, 'h1', h1, 'h2', h2)
+        # v1.7 Phase 1.4 fix: host-materialize cupy results before returning
+        # so user-facing code that calls ``np.asarray(sig.sig1)`` etc. does
+        # not trip on cupy's implicit-conversion guard.  Downstream
+        # excitation runners (PlaneWave/Dipole/EELS) already host-promote
+        # internally, so this is a defensive belt-and-braces guarantee.
+        if is_cupy_array(sig1_all):
+            sig1_all = to_host(sig1_all)
+        if is_cupy_array(sig2_all):
+            sig2_all = to_host(sig2_all)
+        if is_cupy_array(h1_all):
+            h1_all = to_host(h1_all)
+        if is_cupy_array(h2_all):
+            h2_all = to_host(h2_all)
+
         from ..greenfun import CompStruct
         sig = CompStruct(self.p, enei, sig1=sig1_all, sig2=sig2_all, h1=h1_all, h2=h2_all)
 

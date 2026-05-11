@@ -6,7 +6,7 @@ from typing import List, Dict, Tuple, Optional, Union, Any, Callable
 import numpy as np
 from scipy.linalg import lu_factor, lu_solve
 
-from ..utils.gpu import lu_factor_dispatch, lu_solve_dispatch, matmul_dispatch
+from ..utils.gpu import lu_factor_dispatch, lu_solve_dispatch, matmul_dispatch, to_host, is_cupy_array
 
 from ..greenfun import CompGreenRetLayer, CompStruct
 
@@ -627,6 +627,16 @@ class BEMRetLayer(object):
                 sig2[:, ipol] = s2
                 h1[:, :, ipol] = hh1
                 h2[:, :, ipol] = hh2
+
+        # v1.7 Phase 1.4: host-materialize before returning to user.
+        if is_cupy_array(sig1):
+            sig1 = to_host(sig1)
+        if is_cupy_array(sig2):
+            sig2 = to_host(sig2)
+        if is_cupy_array(h1):
+            h1 = to_host(h1)
+        if is_cupy_array(h2):
+            h2 = to_host(h2)
 
         sig = CompStruct(self.p, enei, sig1 = sig1, sig2 = sig2,
             h1 = h1, h2 = h2)

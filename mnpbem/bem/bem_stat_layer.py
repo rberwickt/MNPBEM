@@ -7,7 +7,7 @@ import numpy as np
 from scipy.linalg import lu_factor, lu_solve
 
 from ..greenfun import CompGreenStatLayer, CompStruct
-from ..utils.gpu import lu_factor_dispatch, lu_solve_dispatch
+from ..utils.gpu import lu_factor_dispatch, lu_solve_dispatch, to_host, is_cupy_array
 
 
 class BEMStatLayer(object):
@@ -96,6 +96,10 @@ class BEMStatLayer(object):
 
         if sig_result.shape != orig_shape:
             sig_result = sig_result.reshape(orig_shape)
+
+        # v1.7 Phase 1.4: host-materialize before returning to user.
+        if is_cupy_array(sig_result):
+            sig_result = to_host(sig_result)
 
         sig = CompStruct(self.p, exc.enei, sig = sig_result)
 

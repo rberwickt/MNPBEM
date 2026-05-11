@@ -354,6 +354,16 @@ class BEMRetMirror(object):
                 _lu_solve_multi(self._G2_lu[y], h2y),
                 _lu_solve_multi(self._G2_lu[z], h2z))
 
+            # v1.7 Phase 1.4: host-materialize so user code can call np.asarray.
+            if is_cupy_array(sig1_val):
+                sig1_val = to_host(sig1_val)
+            if is_cupy_array(sig2_val):
+                sig2_val = to_host(sig2_val)
+            if is_cupy_array(h1_val):
+                h1_val = to_host(h1_val)
+            if is_cupy_array(h2_val):
+                h2_val = to_host(h2_val)
+
             val = CompStruct(self.p, exc.enei,
                              sig1 = sig1_val, sig2 = sig2_val,
                              h1 = h1_val, h2 = h2_val)

@@ -19,7 +19,7 @@ import numpy as np
 from scipy.linalg import lu_factor, lu_solve
 from ..greenfun import CompGreenStat, CompStruct
 from ..utils.matlab_compat import msqrt
-from ..utils.gpu import lu_factor_dispatch, lu_solve_dispatch
+from ..utils.gpu import lu_factor_dispatch, lu_solve_dispatch, to_host, is_cupy_array
 
 
 def _vram_share_lu_kwargs() -> dict:
@@ -289,6 +289,9 @@ class BEMStat(object):
             sig_result = self._schur_solve(exc.phip)
         else:
             sig_result = self._lu_solve(self.mat_lu, exc.phip)
+        # v1.7 Phase 1.4 fix: host-materialize so np.asarray(sig.sig) works.
+        if is_cupy_array(sig_result):
+            sig_result = to_host(sig_result)
         sig = CompStruct(self.p, exc.enei, sig=sig_result)
 
         return sig, self
