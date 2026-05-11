@@ -7,9 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+## [1.7.0] - 2026-05-11
 
-- (none — see [1.6.4] for the most recent release)
+### Fixed
+
+- **GPU correctness audit (17-18 bug)**: 5 agent (A1-A5) parallel audit
+  + Phase 1 integration audit 결과. 모든 (BEM solver × excitation ×
+  layer / mirror) 조합이 GPU 모드에서 CPU 기준과 1e-7 face / 1e-9
+  cross section 으로 일치함.
+
+#### A1 — BEMRet / BEMRetLayer
+
+- disjoint dimer 비균일 eps edge case 회귀 가드 추가.
+
+#### A2 — BEMRetIter / BEMRetLayerIter
+
+- dense path GPU backend mix fix.
+
+#### A3 — BEMStat family
+
+- `clear()` stale-cache + GPU LU 누수.
+
+#### A4 — Mirror BEM 4 종
+
+- `CompGreenRetMirror` / `CompGreenStatMirror` eval cupy 결과 host promotion.
+- `BEMStatEigMirror` half-mesh index range fix.
+- `BEMLayerMirror` dummy assertion.
+
+#### A5 — Excitation runners 17 종
+
+- PlaneWaveStat / DipoleStat / DipoleRet / DipoleStatLayer /
+  DipoleRetLayer / EELSStat / EELSRet 의 cupy sig 멤버 host
+  materialization.
+
+#### Phase 1 (integration)
+
+- **CompGreenRet `_matmul` / `_cross`**: cupy operand 들어올 때
+  silent zero 반환 → host promotion 추가.
+- **BEM solver `solve()` 반환**: cupy sig 멤버를 user-facing host
+  변환 (BEMRet, BEMStat, BEMRetLayer, BEMStatLayer, BEMRetMirror,
+  BEMStatMirror). 데모 스크립트의 `np.asarray(sig.sig1)` 류 호출
+  안전.
+- **`lu_solve_native` GPU LU + cupy b** residency 회귀 가드 추가.
+- EELS × Layer integration smoke test 신규 (EELS × Mirror 는
+  미지원 — MATLAB Demo set 에도 없는 조합).
+
+### 검증
+
+- 72 demo regression (`/home/yoojk20/scratch/mnpbem_demo_comparison`):
+  v1.7 GPU 모드 BAD 0 / 72, perf 65 / 72.
 
 ## [1.6.4] - 2026-05-08
 
