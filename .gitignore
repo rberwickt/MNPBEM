@@ -2,9 +2,9 @@ __pycache__/
 *.pyc
 
 # Test files (local only)
-test_*.py
+/test_*.py
 test_*.m
-compare_*.py
+/compare_*.py
 TEST_README.md
 *_results.mat
 *_results.npz
