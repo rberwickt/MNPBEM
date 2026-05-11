@@ -95,6 +95,45 @@ def test_lu_solve_native_keeps_cupy_when_b_is_cupy():
     assert isinstance(x, np.ndarray)
 
 
+@cupy_required
+def test_lu_solve_native_keeps_cupy_on_gpu_lu():
+    # v1.7 Phase 1.3 audit: confirm GPU LU + cupy b returns cupy (no host
+    # round-trip).  Callers in bem_ret.py rely on this when MNPBEM_GPU_NATIVE
+    # is active so downstream cupy broadcast ops do not mix host/device.
+    import os
+    from mnpbem.utils.gpu import lu_factor_dispatch, lu_solve_native
+
+    old_gpu = os.environ.get('MNPBEM_GPU')
+    old_threshold = os.environ.get('MNPBEM_GPU_THRESHOLD')
+    os.environ['MNPBEM_GPU'] = '1'
+    os.environ['MNPBEM_GPU_THRESHOLD'] = '10'
+    try:
+        # Force re-detection of USE_GPU / GPU_THRESHOLD by reloading
+        import importlib
+        from mnpbem.utils import gpu as gpu_mod
+        importlib.reload(gpu_mod)
+
+        n = 64
+        A = np.eye(n) + 0.01 * np.random.randn(n, n)
+        A_pkg = gpu_mod.lu_factor_dispatch(A)
+        assert A_pkg[0] == 'gpu', 'expected GPU LU, got tag={}'.format(A_pkg[0])
+        b_cp = cp.eye(n)
+        x = gpu_mod.lu_solve_native(A_pkg, b_cp)
+        assert isinstance(x, cp.ndarray), 'GPU LU + cupy b must return cupy'
+    finally:
+        if old_gpu is None:
+            os.environ.pop('MNPBEM_GPU', None)
+        else:
+            os.environ['MNPBEM_GPU'] = old_gpu
+        if old_threshold is None:
+            os.environ.pop('MNPBEM_GPU_THRESHOLD', None)
+        else:
+            os.environ['MNPBEM_GPU_THRESHOLD'] = old_threshold
+        import importlib
+        from mnpbem.utils import gpu as gpu_mod
+        importlib.reload(gpu_mod)
+
+
 # ---------------------------------------------------------------------------
 # Bug 1: BEMRet CPU init path consistency under MNPBEM_GPU=0.
 # ---------------------------------------------------------------------------
