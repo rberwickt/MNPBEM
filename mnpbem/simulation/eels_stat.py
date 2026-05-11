@@ -178,9 +178,13 @@ class EELSStat(EELSBase):
         phi, _ = self.potinfty(q, 1.0)
 
         # MATLAB: loss.m lines 20-23
-        # Surface plasmon loss [Eq. (18)]
+        # Surface plasmon loss [Eq. (18)].
+        # A5 fix: materialize cupy sig on host so numpy matmul does not raise.
+        _sig_raw = sig.sig
+        sig_arr = (_sig_raw.get() if (hasattr(_sig_raw, 'get')
+            and not isinstance(_sig_raw, np.ndarray)) else np.asarray(_sig_raw))
         psurf = (-FINE ** 2 / (BOHR * HARTREE * np.pi)
-                 * np.imag(self.p.area @ (np.conj(phi) * sig.sig)))
+                 * np.imag(self.p.area @ (np.conj(phi) * sig_arr)))
 
         # MATLAB: loss.m line 25
         pbulk = self.bulkloss(sig.enei)

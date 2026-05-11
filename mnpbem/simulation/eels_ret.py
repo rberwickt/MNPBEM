@@ -329,10 +329,15 @@ class EELSRet(EELSBase):
         # ---- ensure sig arrays are 2D/3D for uniform indexing ----
         # BEMRet.solve() squeezes single-polarization: sig1=(n,), h1=(n,3)
         # MATLAB always has sig1=(n,npol), h1=(n,3,npol).
-        sig1 = sig.sig1
-        sig2 = sig.sig2
-        h1 = sig.h1
-        h2 = sig.h2
+        # A5 fix: materialize cupy sig members on host so numpy matmul does
+        # not raise on a cupy operand.
+        def _h(x):
+            return (x.get() if (hasattr(x, 'get')
+                and not isinstance(x, np.ndarray)) else np.asarray(x))
+        sig1 = _h(sig.sig1)
+        sig2 = _h(sig.sig2)
+        h1 = _h(sig.h1)
+        h2 = _h(sig.h2)
         if sig1.ndim == 1:
             sig1 = sig1[:, np.newaxis]
         if sig2.ndim == 1:
