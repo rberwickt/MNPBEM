@@ -77,7 +77,12 @@ class BEMIter(object):
             iter_info = np.array([self.maxit, 0])
 
         elif self.solver == 'gmres':
-            restart = self.restart if self.restart is not None else min(n, 20)
+            # MATLAB MNPBEM parity: 'restart', [] -> no restart (full Krylov up to maxit).
+            # scipy gmres requires int, so use maxit (full subspace).
+            # Previous fallback min(n, 20) forced GMRES(20), causing slow / failed
+            # convergence on ill-conditioned matrices (touching dimer, charge-transfer
+            # plasmon). Setting restart=maxit eliminates restart cycles entirely.
+            restart = self.restart if self.restart is not None else min(n, self.maxit)
             x, flag = gmres(a_op, b, x0 = x0, rtol = self.tol, maxiter = self.maxit,
                 restart = restart, M = m_op)
             relres = np.linalg.norm(a_op @ x - b) / np.linalg.norm(b) if np.linalg.norm(b) > 0 else 0.0
