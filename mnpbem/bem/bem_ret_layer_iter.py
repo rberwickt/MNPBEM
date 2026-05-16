@@ -103,6 +103,101 @@ def _coerce_host(val: Any) -> Any:
     return val
 
 
+# ---------------------------------------------------------------------------
+# B-3 distributed-build helpers (v1.7.3 Phase 3)
+# ---------------------------------------------------------------------------
+
+def _vram_share_active() -> bool:
+    """Return True when distributed-build is enabled.
+
+    Mirrors BEMRetIter helper; activated by
+    ``MNPBEM_VRAM_SHARE_DISTRIBUTED=1`` plus the usual VRAM-share env
+    config (``MNPBEM_VRAM_SHARE=1`` + ``MNPBEM_VRAM_SHARE_GPUS>=2``)
+    and cupy/cuSolverMg availability.
+
+    For BEMRetLayerIter the win is larger than the dense BEMRet path:
+    the layered Green's function exposes a 5-block ``(ss, hh, p, sh, hs)``
+    decomposition for the substrate-modified G2/H2 pair, so the
+    per-wavelength full assembly footprint is ~5x the equivalent
+    non-substrate run.  Each of the inner pairs (G1, H1) is a single
+    matrix and benefits directly; the structured outer pair stays on
+    the legacy path (the substrate-tabulated assembly inside
+    _LayerGreen does its own per-block work that does not yet have an
+    eval_block analogue).
+    """
+    if os.environ.get('MNPBEM_VRAM_SHARE', '0') != '1':
+        return False
+    if os.environ.get('MNPBEM_VRAM_SHARE_DISTRIBUTED', '0') != '1':
+        return False
+    try:
+        n_gpus = int(os.environ.get('MNPBEM_VRAM_SHARE_GPUS', '1'))
+    except (TypeError, ValueError):
+        return False
+    if n_gpus < 2:
+        return False
+    if not _CUPY_OK_LAYER:
+        return False
+    try:
+        from ..utils.multi_gpu_lu import cusolvermg_available
+        return bool(cusolvermg_available())
+    except Exception:
+        return False
+
+
+def _vram_share_env_config() -> Tuple[int, str, Optional[List[int]]]:
+    """Resolve (n_gpus, backend, device_ids) for the distributed path."""
+    n_gpus = int(os.environ.get('MNPBEM_VRAM_SHARE_GPUS', '1'))
+    backend = os.environ.get('MNPBEM_VRAM_SHARE_BACKEND', 'cusolvermg')
+    devs_env = os.environ.get('MNPBEM_VRAM_SHARE_DEVICE_IDS', '')
+    device_ids: Optional[List[int]] = None
+    if devs_env.strip():
+        try:
+            device_ids = [int(x) for x in devs_env.split(',') if x.strip()]
+            if len(device_ids) != n_gpus:
+                device_ids = None
+        except (TypeError, ValueError):
+            device_ids = None
+    return n_gpus, backend, device_ids
+
+
+def _distributed_block_assemble_layer(green: Any,
+        enei: float,
+        ncomb_list: List[Tuple[int, int, str, int]],
+        nrows: int,
+        ncols: int,
+        n_gpus: int,
+        device_ids: Optional[List[int]]) -> Any:
+    """Same as BEMRetIter's ``_distributed_block_assemble`` for the layered
+    Green function.  We keep a separate helper here so the layered path
+    can grow extra parameters (e.g. block-key forwarding for the (ss, hh,
+    p, sh, hs) decomposition) without touching the BEMRetIter helper.
+    """
+    from ..utils.distributed_matrix import DistributedMatrix
+    import numpy as _np_local
+
+    def _evalfn(gpu_idx: int, c0: int, c1: int) -> Any:
+        out = None
+        for (i, j, key, sign) in ncomb_list:
+            blk = green.eval_block(i, j, key, enei, c0, c1)
+            if out is None:
+                out = sign * blk if sign != 1 else blk.copy()
+            else:
+                if sign == 1:
+                    out = out + blk
+                elif sign == -1:
+                    out = out - blk
+                else:
+                    out = out + sign * blk
+        return out
+
+    return DistributedMatrix.from_func(
+            shape = (nrows, ncols),
+            dtype = _np_local.complex128,
+            n_gpus = n_gpus,
+            eval_func = _evalfn,
+            device_ids = device_ids)
+
+
 class BEMRetLayerIter(BEMIter):
 
     # MATLAB: @bemretlayeriter properties (Constant)
@@ -206,30 +301,52 @@ class BEMRetLayerIter(BEMIter):
         self._eps1 = self.p.eps1(enei)
         self._eps2 = self.p.eps2(enei)
 
-        # Green functions for inner surfaces
-        # MATLAB: G1 = g{1,1}.G(enei) - g{2,1}.G(enei)
-        # v1.7 A2 fix: coerce every eval() output to host numpy when GPU
-        # path returns cupy ndarrays.  The dense iter ``_afun`` /
-        # ``_mfun`` mix these arrays with host GMRES vectors so we
-        # cannot leave any cupy operands in self._G* / self._H*.
-        G11 = _coerce_host(self.g.eval(0, 0, 'G', enei))
-        G21 = _coerce_host(self.g.eval(1, 0, 'G', enei))
-        G1 = G11 - G21 if not (isinstance(G21, (int, float)) and G21 == 0) else G11
-        # v1.7.2: G11/G21 have already been coerced to host; the cupy buffers
-        # behind them are released the moment the Python names go out of scope
-        # but the pool keeps the blocks until the next allocation triggers
-        # a search.  An explicit drain after each Green-function stage keeps
-        # the high-water mark stable across the four eval() calls below.
-        del G11, G21
-        if _CUPY_OK_LAYER:
-            _cp_layer.get_default_memory_pool().free_all_blocks()
+        # v1.7.3 Phase 3 (B-3) — distributed inner-pair assembly hook.
+        # Builds the unsubstrated inner-pair Green-function differences
+        # (G1 = G11 - G21, H1 = H11 - H21) across N GPUs.  The outer pair
+        # (G2, H2) carries the substrate-modified structured (ss, hh, p,
+        # sh, hs) decomposition and stays on the legacy assembly path
+        # (the dict-valued output is not column-sliceable through
+        # eval_block today; substrate Green tabulation lives in
+        # _LayerGreen._assembly).  Activated by
+        # ``MNPBEM_VRAM_SHARE_DISTRIBUTED=1``; falls back to legacy on
+        # any exception.
+        distributed_inner_built = False
+        if _vram_share_active():
+            try:
+                G1, H1 = self._build_distributed_GH_inner(enei)
+                distributed_inner_built = True
+            except Exception as exc:
+                print('[info] BEMRetLayerIter init: distributed inner G/H '
+                        'build failed ({}), falling back to legacy '
+                        'eval.'.format(exc), flush = True)
+                _gpu_pool_cleanup_layer()
 
-        H11 = _coerce_host(self.g.eval(0, 0, 'H1', enei))
-        H21 = _coerce_host(self.g.eval(1, 0, 'H1', enei))
-        H1 = H11 - H21 if not (isinstance(H21, (int, float)) and H21 == 0) else H11
-        del H11, H21
-        if _CUPY_OK_LAYER:
-            _cp_layer.get_default_memory_pool().free_all_blocks()
+        if not distributed_inner_built:
+            # Green functions for inner surfaces
+            # MATLAB: G1 = g{1,1}.G(enei) - g{2,1}.G(enei)
+            # v1.7 A2 fix: coerce every eval() output to host numpy when GPU
+            # path returns cupy ndarrays.  The dense iter ``_afun`` /
+            # ``_mfun`` mix these arrays with host GMRES vectors so we
+            # cannot leave any cupy operands in self._G* / self._H*.
+            G11 = _coerce_host(self.g.eval(0, 0, 'G', enei))
+            G21 = _coerce_host(self.g.eval(1, 0, 'G', enei))
+            G1 = G11 - G21 if not (isinstance(G21, (int, float)) and G21 == 0) else G11
+            # v1.7.2: G11/G21 have already been coerced to host; the cupy buffers
+            # behind them are released the moment the Python names go out of scope
+            # but the pool keeps the blocks until the next allocation triggers
+            # a search.  An explicit drain after each Green-function stage keeps
+            # the high-water mark stable across the four eval() calls below.
+            del G11, G21
+            if _CUPY_OK_LAYER:
+                _cp_layer.get_default_memory_pool().free_all_blocks()
+
+            H11 = _coerce_host(self.g.eval(0, 0, 'H1', enei))
+            H21 = _coerce_host(self.g.eval(1, 0, 'H1', enei))
+            H1 = H11 - H21 if not (isinstance(H21, (int, float)) and H21 == 0) else H11
+            del H11, H21
+            if _CUPY_OK_LAYER:
+                _cp_layer.get_default_memory_pool().free_all_blocks()
 
         # Green functions for outer surfaces (with layer structure)
         # MATLAB: G2 = g{2,2}.G(enei); g2 = g{1,2}.G(enei)
@@ -314,6 +431,70 @@ class BEMRetLayerIter(BEMIter):
             _gpu_pool_cleanup_layer()
 
         return self
+
+    def _build_distributed_GH_inner(self,
+            enei: float) -> Tuple[np.ndarray, np.ndarray]:
+        """v1.7.3 Phase 3 (B-3): build inner-pair G1/H1 with distributed assembly.
+
+        For BEMRetLayerIter the substrate-modified outer pair (G2, H2)
+        carries the structured (ss, hh, p, sh, hs) decomposition that
+        the dict-valued ``_LayerGreen._assembly`` produces; we keep
+        that on the legacy host eval path because ``eval_block`` is not
+        defined for the structured layer Green function.
+
+        The inner pair (G1 = G11 - G21, H1 = H11 - H21) is plain
+        ndarray-valued and can be built across N GPUs via
+        :meth:`CompGreenRet.eval_block` — which lives at
+        ``self.g.g.eval_block`` because ``CompGreenRetLayer`` wraps a
+        ``CompGreenRet`` direct (free-space) Green object as
+        ``self.g``.
+
+        Returns ``(G1_host, H1_host)`` so the caller can plug them
+        straight into ``self._G1 / self._H1``.
+        """
+        nfaces = self.p.n if hasattr(self.p, 'n') else self.p.nfaces
+        n_gpus, backend, device_ids = _vram_share_env_config()
+
+        # Reach into the direct Green object — ``self.g`` is a
+        # ``CompGreenRetLayer`` which composes a ``CompGreenRet``
+        # at ``self.g.g`` for the direct (non-reflected) component.
+        direct_green = getattr(self.g, 'g', None)
+        if direct_green is None or not hasattr(direct_green, 'eval_block'):
+            raise RuntimeError(
+                    '[error] BEMRetLayerIter distributed build requires '
+                    'CompGreenRetLayer.g.eval_block (got {})'.format(
+                            type(direct_green)))
+
+        print('[info] BEMRetLayerIter init: distributed inner-pair G1/H1 '
+                'build (N={}, n_gpus={}, backend={}).'.format(
+                        nfaces, n_gpus, backend),
+                flush = True)
+
+        # G1 = G(0, 0) - G(1, 0) on the *direct* Green (inner surface;
+        # no substrate-reflected contribution by construction).
+        dm_G1 = _distributed_block_assemble_layer(
+                direct_green, enei,
+                ncomb_list = [(0, 0, 'G', 1), (1, 0, 'G', -1)],
+                nrows = nfaces, ncols = nfaces,
+                n_gpus = n_gpus, device_ids = device_ids)
+        G1_host = dm_G1.to_host()
+        dm_G1.free()
+        if _CUPY_OK_LAYER:
+            _cp_layer.get_default_memory_pool().free_all_blocks()
+
+        dm_H1 = _distributed_block_assemble_layer(
+                direct_green, enei,
+                ncomb_list = [(0, 0, 'H1', 1), (1, 0, 'H1', -1)],
+                nrows = nfaces, ncols = nfaces,
+                n_gpus = n_gpus, device_ids = device_ids)
+        H1_host = dm_H1.to_host()
+        dm_H1.free()
+        if _CUPY_OK_LAYER:
+            _cp_layer.cuda.runtime.deviceSynchronize()
+            _cp_layer.get_default_memory_pool().free_all_blocks()
+            _cp_layer.get_default_pinned_memory_pool().free_all_blocks()
+        _gpu_pool_cleanup_layer()
+        return G1_host, H1_host
 
     def _compress(self,
             hmat: Any) -> Any:
@@ -999,8 +1180,13 @@ class BEMRetLayerIter(BEMIter):
         sig2, h2perp = self._solve_block_lu(im, De, alphaperp)
 
         # Get G2 components
-        # G1_lu = ("cpu"/"gpu", lu_matrix, piv) — index 1 holds the LU matrix.
-        n_g = G1_lu[1].shape[0]
+        # G1_lu = ("cpu"/"gpu"/"mgpu", lu_matrix-or-handle, piv).  For
+        # mgpu the second slot is a MultiGPULU handle with ``.N``; for
+        # cpu/gpu it's an ndarray with ``.shape``.
+        _lu_payload = G1_lu[1]
+        n_g = int(getattr(_lu_payload, 'N', None)
+                if hasattr(_lu_payload, 'N')
+                else _lu_payload.shape[0])
         G2_ss = G2.ss if hasattr(G2, 'ss') else (G2['ss'] if isinstance(G2, dict) else G2)
         G2_sh = G2.sh if hasattr(G2, 'sh') else (G2['sh'] if isinstance(G2, dict) else np.zeros((n_g, n_g)))
         G2_p = G2.p if hasattr(G2, 'p') else (G2['p'] if isinstance(G2, dict) else G2)

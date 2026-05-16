@@ -33,6 +33,79 @@ except Exception:
 
 
 # ---------------------------------------------------------------------------
+# B-3 distributed build gate (Agent E)
+# ---------------------------------------------------------------------------
+# When ``MNPBEM_VRAM_SHARE_DISTRIBUTED=1`` plus ``MNPBEM_VRAM_SHARE=1`` and
+# ``MNPBEM_VRAM_SHARE_GPUS >= 2`` are set, the layer-substrate BEM build
+# routes the dense G/H/Sigma/m_full matrices through ``DistributedMatrix``
+# so that no N^2 buffer ever lives in pinned host memory simultaneously
+# across N GPUs -- each device only ever holds its own column tile.  The
+# LU factors (``G1_lu``, ``G2p_lu``, ``Gamma_lu``, ``m_lu``) are produced
+# by ``DistributedMatrix.lu_factor()`` (cuSolverMg) and carry the existing
+# ``('mgpu', ...)`` tag that ``lu_solve_dispatch`` already understands, so
+# the per-wavelength solve path stays the same.
+#
+# When the gate is OFF (default) the legacy single-GPU/host path runs
+# verbatim -- this keeps every regression scenario bit-identical.
+# ---------------------------------------------------------------------------
+
+
+def _vram_share_active() -> bool:
+    """Return True iff the distributed-build path should be taken.
+
+    Distinct from ``_vram_share_lu_kwargs``: that helper governs whether
+    the LU factor is dispatched to cuSolverMg, while this gate controls
+    whether the *build* (Green-function assembly, GEMMs, scatter) also
+    runs distributed.  Both gates are read separately so a user who only
+    wants the LU split can leave ``MNPBEM_VRAM_SHARE_DISTRIBUTED=0`` and
+    keep the legacy host build.
+    """
+    if not _CUPY_OK_V172:
+        return False
+    if os.environ.get('MNPBEM_VRAM_SHARE', '0') != '1':
+        return False
+    if os.environ.get('MNPBEM_VRAM_SHARE_DISTRIBUTED', '0') != '1':
+        return False
+    try:
+        n_gpus = int(os.environ.get('MNPBEM_VRAM_SHARE_GPUS', '1'))
+    except (TypeError, ValueError):
+        n_gpus = 1
+    if n_gpus < 2:
+        return False
+    # cuSolverMg must be loadable for the distributed LU factor to run.
+    try:
+        from ..utils.multi_gpu_lu import cusolvermg_available
+        if not cusolvermg_available():
+            return False
+    except Exception:
+        return False
+    return True
+
+
+def _vram_share_distributed_kwargs() -> dict:
+    """Return ``{n_gpus, device_ids, block_size}`` for DistributedMatrix.
+
+    Reads the same ``MNPBEM_VRAM_SHARE_*`` env vars as
+    ``_vram_share_lu_kwargs`` so the block-cyclic layout matches what
+    ``lu_factor_dispatch(n_gpus=N)`` would use internally.  Block size is
+    fixed at 256 to align with the cuSolverMg samples and the
+    ``DistributedMatrix`` default.
+    """
+    try:
+        n_gpus = int(os.environ.get('MNPBEM_VRAM_SHARE_GPUS', '1'))
+    except (TypeError, ValueError):
+        n_gpus = 1
+    device_ids: Optional[List[int]] = None
+    dev_env = os.environ.get('MNPBEM_VRAM_SHARE_DEVICE_IDS', '')
+    if dev_env.strip():
+        try:
+            device_ids = [int(x) for x in dev_env.split(',') if x.strip()]
+        except Exception:
+            device_ids = None
+    return {'n_gpus': n_gpus, 'device_ids': device_ids, 'block_size': 256}
+
+
+# ---------------------------------------------------------------------------
 # Backend alignment helper for cupy/numpy mix safety (v1.6.5 fix)
 # ---------------------------------------------------------------------------
 
@@ -186,6 +259,23 @@ class BEMRetLayer(object):
 
         if self.enei is not None and np.isclose(self.enei, enei):
             return self
+
+        # B-3 (Agent E): when the distributed-build gate is on, route
+        # through the cuSolverMg + DistributedMatrix assembly so the
+        # ``m_full`` 2n x 2n dense block never has to fit on a single
+        # device.  Falls back to the legacy host path on any unexpected
+        # failure so existing tests stay green.
+        if not self.use_matlab_engine and _vram_share_active():
+            try:
+                return self._init_distributed_precond(enei)
+            except Exception as _dist_exc:
+                import warnings as _w
+                _w.warn(
+                    '[warn] BEMRetLayer distributed build path failed ({}); '
+                    'falling back to legacy host path.'.format(_dist_exc),
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
 
         # v1.7.2 MATLAB-parity: free cupy pools before allocating the new
         # wavelength's BEM matrices.  The previous wavelength's cached
@@ -891,7 +981,11 @@ class BEMRetLayer(object):
             from .matlab_bem import matlab_solve
             xi2 = matlab_solve(m_full, rhs)
         else:
-            if isinstance(m_lu, tuple) and len(m_lu) == 3 and m_lu[0] in ("cpu", "gpu"):
+            # B-3 (Agent E): also accept the ('mgpu', ...) tag produced by
+            # the distributed-build path -- ``lu_solve_dispatch`` knows how
+            # to route the cuSolverMg distributed solve.
+            if (isinstance(m_lu, tuple) and len(m_lu) == 3
+                    and m_lu[0] in ("cpu", "gpu", "mgpu")):
                 xi2 = lu_solve_dispatch(m_lu, rhs)
             else:
                 xi2 = lu_solve(m_lu, rhs, check_finite=False, overwrite_b=True)
@@ -960,6 +1054,317 @@ class BEMRetLayer(object):
             self.g = CompGreenRetLayer(self.p, self.p, self.layer, **self.options)
         self.g.setup_tabulation(nr = nr, nz = nz)
 
+    # ------------------------------------------------------------------
+    # B-3 distributed build path (Agent E)
+    # ------------------------------------------------------------------
+
+    def _init_distributed_precond(self, enei: float) -> 'BEMRetLayer':
+        """Distributed BEM build for the substrate (layer) solver.
+
+        Mirrors :meth:`init` but routes every dense N^2 matrix through
+        ``DistributedMatrix`` so the host never holds more than one of
+        them at a time.  Each per-GPU tile carries the column slice of
+        the global matrix that ``cusolverMg`` will end up owning, so the
+        LU factor consumes the distributed buffers in place.
+
+        Layout choices
+        --------------
+        - The ``2n x 2n`` block-response matrix ``m_full`` is built as a
+          single :class:`DistributedMatrix` (column block-cyclic across N
+          GPUs).  Its LU factor uses the existing ``('mgpu', ...)`` tag.
+        - The auxiliary scalar-Green N x N matrices (``G1``, ``G2.p``,
+          ``Gamma = Sigma1 - Sigma2p``) are also block-cyclically
+          distributed for their LU factors.
+        - The structured-Green block dict (``G2``, ``G2e``, ``H2``,
+          ``H2e``) is built once on the host (the layer Sommerfeld table
+          assembly is intrinsically per-wavelength CPU-bound; columnar
+          distribution would not save host memory because the tile
+          callback would still need the table per call).  Each
+          structured component is materialized one at a time so peak
+          host residency stays at a single ``N^2`` complex buffer.
+
+        Numerical contract
+        ------------------
+        The combined matrices ``m11..m22`` and ``Gamma``/``Sigma`` are
+        the same products as the legacy path -- only the storage class
+        changes.  cuBLAS / cuSolverMg differ from MKL by floating-point
+        rounding bounded by ``N * eps_machine`` (~1e-12 for dimer-scale
+        meshes), well below the BEM solver's downstream tolerance.
+        """
+
+        from ..utils.distributed_matrix import DistributedMatrix
+
+        cp = _cp_v172
+        dist_kw = _vram_share_distributed_kwargs()
+        n_gpus = int(dist_kw['n_gpus'])
+        device_ids = dist_kw['device_ids']
+        block_size = int(dist_kw['block_size'])
+
+        # ---- Per-wavelength fragmentation cleanup (same as legacy) ----
+        # Close cuSolverMg handles from the previous wavelength FIRST so
+        # the next factor() calls do not collide with stale state.
+        for _attr in ('_G1_lu', '_G2p_lu', '_Gamma_lu', 'm_lu'):
+            _entry = getattr(self, _attr, None)
+            if isinstance(_entry, tuple) and len(_entry) == 3 and _entry[0] == 'mgpu':
+                try:
+                    _entry[1].close()
+                except Exception:
+                    pass
+        # Release the matching distributed buffers (kept the LU pointers).
+        for _attr in ('_G1_dm', '_G2p_dm', '_Gamma_dm', '_m_full_dm'):
+            _dm = getattr(self, _attr, None)
+            if _dm is not None:
+                try:
+                    _dm.free()
+                except Exception:
+                    pass
+            setattr(self, _attr, None)
+        for _attr in ('_G1_lu', '_G2p_lu', '_Gamma_lu', 'm_lu',
+                      'G1i', 'G2pi', 'G2', 'G2e',
+                      'L1', 'L2p', 'Sigma1', 'Sigma1e', 'Gamma',
+                      'm_full'):
+            if hasattr(self, _attr):
+                setattr(self, _attr, None)
+        try:
+            _pool_limit_gb = float(
+                os.environ.get('MNPBEM_GPU_POOL_LIMIT_GB', '0')
+            )
+        except (TypeError, ValueError):
+            _pool_limit_gb = 0.0
+        try:
+            _mempool = cp.get_default_memory_pool()
+            _pinned = cp.get_default_pinned_memory_pool()
+            if _pool_limit_gb > 0:
+                _mempool.set_limit(size=int(_pool_limit_gb * (1024 ** 3)))
+            import gc as _gc
+            _gc.collect()
+            cp.cuda.runtime.deviceSynchronize()
+            _mempool.free_all_blocks()
+            _pinned.free_all_blocks()
+        except Exception:
+            pass
+
+        self.enei = enei
+
+        # Outer surface normals
+        nvec = self.p.nvec
+        self.nvec = nvec
+        nperp = nvec[:, 2]
+        npar = nvec.copy()
+        npar[:, 2] = 0.0
+        self.npar = npar
+        self.nperp = nperp
+
+        # Wavenumber in vacuum
+        k = 2 * np.pi / enei
+        self.k = k
+
+        # Dielectric function values
+        eps1_vals = self.p.eps1(enei)
+        eps2_vals = self.p.eps2(enei)
+        if np.allclose(eps1_vals, eps1_vals[0]) and np.allclose(eps2_vals, eps2_vals[0]):
+            eps1 = eps1_vals[0]
+            eps2 = eps2_vals[0]
+        else:
+            eps1 = np.diag(eps1_vals)
+            eps2 = np.diag(eps2_vals)
+        self.eps1 = eps1
+        self.eps2 = eps2
+
+        # Green-function object: build once
+        if self.g is None:
+            opts = dict(self.options)
+            if self.greentab is not None:
+                gt = self.greentab
+                if hasattr(gt, 'tab'):
+                    opts['greentab_obj'] = gt.tab
+                elif hasattr(gt, 'r'):
+                    opts['greentab_obj'] = gt
+            self.g = CompGreenRetLayer(self.p, self.p, self.layer, **opts)
+
+        # ---- Inner-surface Green (plain scalar matrices) ----
+        G11 = self.g.eval(0, 0, 'G', enei)
+        G21 = self.g.eval(1, 0, 'G', enei)
+        H11 = self.g.eval(0, 0, 'H1', enei)
+        H21 = self.g.eval(1, 0, 'H1', enei)
+
+        G1 = self._sub_mat(G11, G21)
+        G1e = self._sub_mat(self._mul_eps(eps1, G11), self._mul_eps(eps2, G21))
+        H1 = self._sub_mat(H11, H21)
+        H1e = self._sub_mat(self._mul_eps(eps1, H11), self._mul_eps(eps2, H21))
+        del G11, G21, H11, H21
+        try:
+            cp.cuda.runtime.deviceSynchronize()
+            cp.get_default_memory_pool().free_all_blocks()
+        except Exception:
+            pass
+
+        # ---- Outer-surface Green (structured dict) ----
+        G22 = self.g.eval(1, 1, 'G', enei)
+        G12 = self.g.eval(0, 1, 'G', enei)
+        H22 = self.g.eval(1, 1, 'H2', enei)
+        H12 = self.g.eval(0, 1, 'H2', enei)
+
+        G2 = self._build_outer_mixed(G22, G12)
+        H2 = self._build_outer_mixed(H22, H12)
+        G2e = self._build_outer_mixed_eps(G22, G12, eps2, eps1)
+        H2e = self._build_outer_mixed_eps(H22, H12, eps2, eps1)
+        del G22, G12, H22, H12
+        try:
+            cp.cuda.runtime.deviceSynchronize()
+            cp.get_default_memory_pool().free_all_blocks()
+        except Exception:
+            pass
+
+        n = G1.shape[0]
+
+        # ============================================================
+        # Step 1: distributed LU of G1 and inverse construction
+        # ============================================================
+        # Scatter G1 to N GPUs, factor in place, then solve against I to
+        # recover G1i.  G1i is gathered to host because L1/Sigma1
+        # downstream are formed via host GEMM (with structured G2 dict).
+        G1_dm = DistributedMatrix.from_host(
+            np.ascontiguousarray(G1),
+            n_gpus=n_gpus,
+            device_ids=device_ids,
+            block_size=block_size,
+        )
+        del G1
+        G1_lu_handle = G1_dm.lu_factor(backend='cusolvermg')
+        # The DistributedMatrix tiles now hold the L/U factors; keep
+        # both refs alive so the lu_handle's pointer array stays valid.
+        self._G1_lu = ('mgpu', G1_lu_handle, None)
+        self._G1_dm = G1_dm  # keep distributed buffers alive
+        # Recover full inverse on host (one cuSolverMg gather).
+        G1i = G1_lu_handle.solve(np.eye(n, dtype=complex))
+
+        # ============================================================
+        # Step 2: distributed LU of G2.p (substrate parallel block)
+        # ============================================================
+        G2p = G2['p']
+        G2p_dm = DistributedMatrix.from_host(
+            np.ascontiguousarray(G2p),
+            n_gpus=n_gpus,
+            device_ids=device_ids,
+            block_size=block_size,
+        )
+        del G2p
+        G2p_lu_handle = G2p_dm.lu_factor(backend='cusolvermg')
+        self._G2p_lu = ('mgpu', G2p_lu_handle, None)
+        self._G2p_dm = G2p_dm
+        G2pi = G2p_lu_handle.solve(np.eye(n, dtype=complex))
+
+        # ============================================================
+        # Step 3: Sigma / L matrices on host (structured G2 dict)
+        # ============================================================
+        Sigma1 = H1 @ G1i
+        Sigma1e = H1e @ G1i
+        Sigma2p = H2['p'] @ G2pi
+        L1 = G1e @ G1i
+        L2p = G2e['p'] @ G2pi
+        del H1, H1e, G1e
+
+        # ============================================================
+        # Step 4: distributed LU of Gamma = Sigma1 - Sigma2p
+        # ============================================================
+        Gamma_host = np.ascontiguousarray(Sigma1 - Sigma2p)
+        del Sigma2p
+        Gamma_dm = DistributedMatrix.from_host(
+            Gamma_host,
+            n_gpus=n_gpus,
+            device_ids=device_ids,
+            block_size=block_size,
+        )
+        Gamma_lu_handle = Gamma_dm.lu_factor(backend='cusolvermg')
+        self._Gamma_lu = ('mgpu', Gamma_lu_handle, None)
+        self._Gamma_dm = Gamma_dm
+        Gamma = Gamma_lu_handle.solve(np.eye(n, dtype=complex))
+        del Gamma_host
+
+        # Gammapar = ik*(L1-L2p)*Gamma .* (npar*npar')
+        npar_outer = npar @ npar.T
+        Gammapar = 1j * k * ((L1 - L2p) @ Gamma) * npar_outer
+        del npar_outer
+
+        # ============================================================
+        # Step 5: assemble the 2n x 2n block matrix on host then scatter
+        # ============================================================
+        # We allocate m_full on the host (single 4*N^2 complex buffer)
+        # before the structured-G2 ``diff_*`` intermediates are released,
+        # which is the same peak as the legacy path.  The DistributedMatrix
+        # then scatters columns block-cyclic and the host copy is freed
+        # immediately so subsequent wavelengths do not double-occupy.
+        diff_ss = L1 @ G2['ss'] - G2e['ss']
+        diff_sh = L1 @ G2['sh'] - G2e['sh']
+        diff_hh = L1 @ G2['hh'] - G2e['hh']
+
+        m11 = (Sigma1e @ G2['ss'] - H2e['ss']
+            - 1j * k * (Gammapar @ diff_ss + diff_sh * nperp[:, np.newaxis]))
+        m12 = (Sigma1e @ G2['sh'] - H2e['sh']
+            - 1j * k * (Gammapar @ diff_sh + diff_hh * nperp[:, np.newaxis]))
+        m21 = (Sigma1 @ G2['hs'] - H2['hs']
+            - 1j * k * diff_ss * nperp[:, np.newaxis])
+        m22 = (Sigma1 @ G2['hh'] - H2['hh']
+            - 1j * k * diff_sh * nperp[:, np.newaxis])
+        del diff_ss, diff_sh, diff_hh, Gammapar, H2, H2e
+
+        m_full = np.empty((2 * n, 2 * n), dtype=complex)
+        m_full[:n, :n] = m11
+        m_full[:n, n:] = m12
+        m_full[n:, :n] = m21
+        m_full[n:, n:] = m22
+        del m11, m12, m21, m22
+
+        m_full_dm = DistributedMatrix.from_host(
+            m_full,
+            n_gpus=n_gpus,
+            device_ids=device_ids,
+            block_size=block_size,
+        )
+        del m_full  # host copy freed; tiles now hold the data
+        try:
+            cp.cuda.runtime.deviceSynchronize()
+            cp.get_default_memory_pool().free_all_blocks()
+            cp.get_default_pinned_memory_pool().free_all_blocks()
+        except Exception:
+            pass
+
+        m_lu_handle = m_full_dm.lu_factor(backend='cusolvermg')
+        self.m_full = None
+        self.m_lu = ('mgpu', m_lu_handle, None)
+        self._m_full_dm = m_full_dm
+
+        # Store auxiliary matrices on host (same as legacy path) so
+        # ``_solve_single`` can reuse the existing numpy code path.
+        self.G1i = G1i
+        self.G2pi = G2pi
+        self.G2 = G2
+        self.G2e = G2e
+        self.L1 = L1
+        self.L2p = L2p
+        self.Sigma1 = Sigma1
+        self.Sigma1e = Sigma1e
+        self.Gamma = Gamma
+
+        # Sync ALL devices in the distributed grid before returning.
+        # cuSolverMg leaves async work queued on each device and the next
+        # ``solve()`` (running on a different handle) can otherwise see
+        # half-written descriptors and fail with status 6.
+        try:
+            for _dev in (device_ids or list(range(n_gpus))):
+                try:
+                    cp.cuda.runtime.setDevice(int(_dev))
+                    cp.cuda.runtime.deviceSynchronize()
+                    cp.get_default_memory_pool().free_all_blocks()
+                except Exception:
+                    pass
+            cp.cuda.runtime.setDevice(int((device_ids or [0])[0]))
+            cp.get_default_pinned_memory_pool().free_all_blocks()
+        except Exception:
+            pass
+        return self
+
     def clear(self) -> 'BEMRetLayer':
 
         self.L1 = None
@@ -976,6 +1381,15 @@ class BEMRetLayer(object):
         self._G1_lu = None
         self._G2p_lu = None
         self._Gamma_lu = None
+        # B-3 (Agent E): release distributed buffers when present.
+        for _attr in ('_G1_dm', '_G2p_dm', '_Gamma_dm', '_m_full_dm'):
+            _dm = getattr(self, _attr, None)
+            if _dm is not None:
+                try:
+                    _dm.free()
+                except Exception:
+                    pass
+                setattr(self, _attr, None)
         self.enei = None
         return self
 

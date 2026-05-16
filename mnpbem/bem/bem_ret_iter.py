@@ -85,6 +85,145 @@ def _vram_share_lu_kwargs() -> dict:
     return {'n_gpus': n_gpus, 'backend': backend}
 
 
+# ---------------------------------------------------------------------------
+# B-3 distributed-build helpers (v1.7.3 Phase 3)
+# ---------------------------------------------------------------------------
+
+def _vram_share_active() -> bool:
+    """Return True when distributed-build is enabled.
+
+    Activated when **all** of the following hold:
+    - ``MNPBEM_VRAM_SHARE=1``
+    - ``MNPBEM_VRAM_SHARE_DISTRIBUTED=1`` (gates the heavier distributed
+      build path; default off so existing call sites stay bit-identical)
+    - ``MNPBEM_VRAM_SHARE_GPUS>=2``
+    - cupy + cuSolverMg are importable
+
+    Distributed build assembles G/H matrices directly across N GPUs via
+    ``DistributedMatrix.from_func`` + ``CompGreenRet.eval_block``, avoiding
+    the host-resident full ``N x N`` Green-function matrix that would
+    otherwise dominate the BEM build memory.  Used for the 15072-face
+    Au@Ag dimer sweep where the per-wavelength precond pipeline would
+    otherwise OOM around N~12k.
+    """
+    if os.environ.get('MNPBEM_VRAM_SHARE', '0') != '1':
+        return False
+    if os.environ.get('MNPBEM_VRAM_SHARE_DISTRIBUTED', '0') != '1':
+        return False
+    try:
+        n_gpus = int(os.environ.get('MNPBEM_VRAM_SHARE_GPUS', '1'))
+    except (TypeError, ValueError):
+        return False
+    if n_gpus < 2:
+        return False
+    if not _CUPY_OK_ITER:
+        return False
+    try:
+        from ..utils.multi_gpu_lu import cusolvermg_available
+        return bool(cusolvermg_available())
+    except Exception:
+        return False
+
+
+def _vram_share_env_config() -> Tuple[int, str, Optional[List[int]]]:
+    """Resolve (n_gpus, backend, device_ids) for the distributed path.
+
+    Caller should already have checked ``_vram_share_active()``.
+    """
+    n_gpus = int(os.environ.get('MNPBEM_VRAM_SHARE_GPUS', '1'))
+    backend = os.environ.get('MNPBEM_VRAM_SHARE_BACKEND', 'cusolvermg')
+    devs_env = os.environ.get('MNPBEM_VRAM_SHARE_DEVICE_IDS', '')
+    device_ids: Optional[List[int]] = None
+    if devs_env.strip():
+        try:
+            device_ids = [int(x) for x in devs_env.split(',') if x.strip()]
+            if len(device_ids) != n_gpus:
+                device_ids = None
+        except (TypeError, ValueError):
+            device_ids = None
+    return n_gpus, backend, device_ids
+
+
+def _build_distributed_green(green: Any,
+        i: int,
+        j: int,
+        key: str,
+        enei: float,
+        nrows: int,
+        ncols: int,
+        n_gpus: int,
+        device_ids: Optional[List[int]]) -> Any:
+    """Assemble a single (i, j, key) Green-function block as a DistributedMatrix.
+
+    Each GPU computes its own column tile via :meth:`CompGreenRet.eval_block`,
+    so the full ``(nrows, ncols)`` matrix never materialises on any single
+    device.  Returned as ``DistributedMatrix`` (caller does ``.to_host()``
+    when it needs a host gather for the precond pipeline).
+
+    Note: caller passes ``i, j, key, enei`` straight through to
+    ``green.eval_block``.  The eval_block API raises NotImplementedError
+    for the H-matrix / hmode path, so the caller must guard distributed
+    build against ACA wrappers.
+    """
+    from ..utils.distributed_matrix import DistributedMatrix
+    import numpy as _np_local
+
+    def _evalfn(gpu_idx: int, c0: int, c1: int) -> Any:
+        return green.eval_block(i, j, key, enei, c0, c1)
+
+    return DistributedMatrix.from_func(
+            shape = (nrows, ncols),
+            dtype = _np_local.complex128,
+            n_gpus = n_gpus,
+            eval_func = _evalfn,
+            device_ids = device_ids)
+
+
+def _distributed_block_assemble(green: Any,
+        enei: float,
+        ncomb_list: List[Tuple[int, int, str, int]],
+        nrows: int,
+        ncols: int,
+        n_gpus: int,
+        device_ids: Optional[List[int]]) -> Any:
+    """Build a linear combination of Green-function blocks distributed.
+
+    ``ncomb_list`` is ``[(i, j, key, sign), ...]`` — the per-GPU eval_func
+    sums ``sign * eval_block(...)`` so the resulting DistributedMatrix is
+    ``sum_k sign_k · G(i_k, j_k, key_k)``.  Used for ``G1 = G11 - G21``
+    and friends without ever materialising the individual ``G11 / G21``
+    full matrices on a single device.
+    """
+    from ..utils.distributed_matrix import DistributedMatrix
+    import numpy as _np_local
+
+    def _evalfn(gpu_idx: int, c0: int, c1: int) -> Any:
+        out = None
+        for (i, j, key, sign) in ncomb_list:
+            blk = green.eval_block(i, j, key, enei, c0, c1)
+            if out is None:
+                if isinstance(blk, _np_local.ndarray):
+                    out = sign * blk if sign != 1 else blk.copy()
+                else:
+                    # cupy ndarray
+                    out = sign * blk if sign != 1 else blk.copy()
+            else:
+                if sign == 1:
+                    out = out + blk
+                elif sign == -1:
+                    out = out - blk
+                else:
+                    out = out + sign * blk
+        return out
+
+    return DistributedMatrix.from_func(
+            shape = (nrows, ncols),
+            dtype = _np_local.complex128,
+            n_gpus = n_gpus,
+            eval_func = _evalfn,
+            device_ids = device_ids)
+
+
 class _GpuPrecondOOM(Exception):
     pass
 
@@ -439,45 +578,69 @@ class BEMRetIter(BEMIter):
         self._eps1 = self.p.eps1(enei)
         self._eps2 = self.p.eps2(enei)
 
-        # Green functions and surface derivatives
-        # MATLAB: G1 = g{1,1}.G(enei) - g{2,1}.G(enei)
-        G11 = self.g.eval(0, 0, 'G', enei)
-        G21 = self.g.eval(1, 0, 'G', enei)
-        G22 = self.g.eval(1, 1, 'G', enei)
-        G12 = self.g.eval(0, 1, 'G', enei)
+        # v1.7.3 Phase 3 (B-3) — distributed G/H assembly hook.
+        # When the env-gated distributed build is active AND the dense
+        # (non-H-matrix / non-refun) path is in use, build each of the
+        # four Green-function differences directly across N GPUs via
+        # ``DistributedMatrix.from_func`` + ``CompGreenRet.eval_block``.
+        # Each per-GPU column tile is ~N/n_gpus * N * 16 B (e.g. 0.9 GB
+        # per GPU at N=15072 / n_gpus=4 vs 3.6 GB / N x N matrix on a
+        # single device).  After distributed assembly we gather to host
+        # once per matrix; the downstream pipeline (LU dispatch, _afun /
+        # _mfun matvecs) is identical to the legacy host path.
+        distributed_built = False
+        if (_vram_share_active()
+                and not self._hmatrix
+                and self._refun is None):
+            try:
+                self._build_distributed_GH(enei)
+                distributed_built = True
+            except Exception as exc:
+                print('[info] BEMRetIter init: distributed G/H build failed '
+                        '({}), falling back to legacy eval.'.format(exc),
+                        flush = True)
+                _gpu_pool_cleanup_iter()
 
-        self._G1 = G11 - G21 if not (isinstance(G21, (int, float)) and G21 == 0) else G11
-        self._G2 = G22 - G12 if not (isinstance(G12, (int, float)) and G12 == 0) else G22
-        # v1.7.2: release the cross-block intermediates (Gxx) so the cupy
-        # pool can reclaim their device buffers before the H1/H2 round
-        # starts uploading the next ~2 N^2 of data.
-        del G11, G21, G22, G12
-        if _CUPY_OK_ITER:
-            _cp_iter.get_default_memory_pool().free_all_blocks()
+        if not distributed_built:
+            # Green functions and surface derivatives
+            # MATLAB: G1 = g{1,1}.G(enei) - g{2,1}.G(enei)
+            G11 = self.g.eval(0, 0, 'G', enei)
+            G21 = self.g.eval(1, 0, 'G', enei)
+            G22 = self.g.eval(1, 1, 'G', enei)
+            G12 = self.g.eval(0, 1, 'G', enei)
 
-        H11 = self.g.eval(0, 0, 'H1', enei)
-        H21 = self.g.eval(1, 0, 'H1', enei)
-        H22 = self.g.eval(1, 1, 'H2', enei)
-        H12 = self.g.eval(0, 1, 'H2', enei)
+            self._G1 = G11 - G21 if not (isinstance(G21, (int, float)) and G21 == 0) else G11
+            self._G2 = G22 - G12 if not (isinstance(G12, (int, float)) and G12 == 0) else G22
+            # v1.7.2: release the cross-block intermediates (Gxx) so the cupy
+            # pool can reclaim their device buffers before the H1/H2 round
+            # starts uploading the next ~2 N^2 of data.
+            del G11, G21, G22, G12
+            if _CUPY_OK_ITER:
+                _cp_iter.get_default_memory_pool().free_all_blocks()
 
-        self._H1 = H11 - H21 if not (isinstance(H21, (int, float)) and H21 == 0) else H11
-        self._H2 = H22 - H12 if not (isinstance(H12, (int, float)) and H12 == 0) else H22
-        # v1.7.2: same logic for the H-block intermediates.
-        del H11, H21, H22, H12
-        if _CUPY_OK_ITER:
-            _cp_iter.cuda.runtime.deviceSynchronize()
-            _cp_iter.get_default_memory_pool().free_all_blocks()
+            H11 = self.g.eval(0, 0, 'H1', enei)
+            H21 = self.g.eval(1, 0, 'H1', enei)
+            H22 = self.g.eval(1, 1, 'H2', enei)
+            H12 = self.g.eval(0, 1, 'H2', enei)
 
-        # v1.7 A2 fix: when MNPBEM_GPU=1 + dense path, CompGreenRet returns
-        # cupy ndarrays for G/H. The GMRES iterates (``_afun``) get host
-        # numpy vectors from scipy.sparse.linalg.gmres, so cupy @ numpy
-        # mixes backends and raises TypeError. HMatrix objects already
-        # handle the mix inside ``mtimes_vec`` so we only normalise plain
-        # ndarrays here. Leaves HMatrix / refun paths bit-identical.
-        for _attr in ('_G1', '_G2', '_H1', '_H2'):
-            _val = getattr(self, _attr)
-            if is_cupy_array(_val):
-                setattr(self, _attr, to_host(_val))
+            self._H1 = H11 - H21 if not (isinstance(H21, (int, float)) and H21 == 0) else H11
+            self._H2 = H22 - H12 if not (isinstance(H12, (int, float)) and H12 == 0) else H22
+            # v1.7.2: same logic for the H-block intermediates.
+            del H11, H21, H22, H12
+            if _CUPY_OK_ITER:
+                _cp_iter.cuda.runtime.deviceSynchronize()
+                _cp_iter.get_default_memory_pool().free_all_blocks()
+
+            # v1.7 A2 fix: when MNPBEM_GPU=1 + dense path, CompGreenRet returns
+            # cupy ndarrays for G/H. The GMRES iterates (``_afun``) get host
+            # numpy vectors from scipy.sparse.linalg.gmres, so cupy @ numpy
+            # mixes backends and raises TypeError. HMatrix objects already
+            # handle the mix inside ``mtimes_vec`` so we only normalise plain
+            # ndarrays here. Leaves HMatrix / refun paths bit-identical.
+            for _attr in ('_G1', '_G2', '_H1', '_H2'):
+                _val = getattr(self, _attr)
+                if is_cupy_array(_val):
+                    setattr(self, _attr, to_host(_val))
 
         # Optional user-supplied refinement (coverlayer.refine for nonlocal
         # cover-layer effects). Applied to dense G/H pairs. If ACA H-matrix
@@ -618,6 +781,13 @@ class BEMRetIter(BEMIter):
         # where ``L1, L2`` are themselves the dense G·eps·G⁻¹ operators.
         # This makes the iter preconditioner numerically equivalent to
         # the dense ``BEMRet`` Sigma factorisation.
+
+        # v1.7.3 Phase 3 (B-3 distributed build): the LU stage uses
+        # ``lu_factor_dispatch`` with the VRAM-share kwargs, which already
+        # routes through cuSolverMg distributed LU when the env vars are
+        # set.  No separate dispatch hook needed here — the distributed
+        # G/H build happens upstream in ``_init_matrices``.
+
         k = 2 * np.pi / enei
         eps1 = self._eps1
         eps2 = self._eps2
@@ -874,6 +1044,95 @@ class BEMRetIter(BEMIter):
             _cp_iter.cuda.runtime.deviceSynchronize()
             _cp_iter.get_default_memory_pool().free_all_blocks()
             _cp_iter.get_default_pinned_memory_pool().free_all_blocks()
+
+    def _build_distributed_GH(self,
+            enei: float) -> None:
+        """v1.7.3 Phase 3 (B-3): build G1/H1/G2/H2 with distributed assembly.
+
+        Activated by ``MNPBEM_VRAM_SHARE_DISTRIBUTED=1`` (gated by
+        ``_vram_share_active()``).  Each of the four Green-function
+        differences (``G1 = G11 - G21``, ``H1 = H11 - H21``,
+        ``G2 = G22 - G12``, ``H2 = H22 - H12``) is built directly across
+        N GPUs via :class:`DistributedMatrix.from_func` +
+        :meth:`CompGreenRet.eval_block`, so the full ``(N, N)`` complex128
+        matrix never materialises on a single device.  At N=15072 with
+        n_gpus=4 the per-GPU column tile peak is ~0.9 GB vs ~3.6 GB for
+        a single-device full build — the difference between fitting in
+        and overshooting the 49 GB A6000 cap.
+
+        After distributed assembly the tiles are gathered to host once
+        (``.to_host()``) and cached on ``self._G1 / self._H1 / self._G2 /
+        self._H2``.  The downstream LU dispatch (``_init_precond``) reads
+        these host matrices and routes the four precond LU factors
+        through cuSolverMg distributed LU (already wired via
+        ``_vram_share_lu_kwargs()``); the GMRES ``_afun`` matvec consumes
+        the host G/H directly.
+
+        Bit-identical to the legacy ``_init_matrices`` G/H assembly to
+        ufunc ordering tolerance; only the *transient* memory profile
+        differs.
+        """
+        nfaces = self.p.n if hasattr(self.p, 'n') else self.p.nfaces
+        n_gpus, backend, device_ids = _vram_share_env_config()
+
+        green = self.g
+        # ACA / refun guarded by caller; bail loudly if a sentinel slipped
+        # through (defence-in-depth).
+        if not hasattr(green, 'eval_block'):
+            raise RuntimeError(
+                    '[error] BEMRetIter distributed build requires '
+                    'CompGreenRet.eval_block (got {})'.format(type(green)))
+
+        print('[info] BEMRetIter init: distributed G/H build (N={}, '
+                'n_gpus={}, backend={}).'.format(nfaces, n_gpus, backend),
+                flush = True)
+
+        # G1 = G(0, 0) - G(1, 0).  When con[1, 0] is 0, ``eval_block`` of
+        # the (1, 0) pair returns a zero-filled tile because all of its
+        # ``con[i1, i2] <= 0`` entries are skipped — _distributed_block_assemble
+        # handles that case implicitly via its (1, 0, 'G', -1) summand.
+        dm_G1 = _distributed_block_assemble(
+                green, enei,
+                ncomb_list = [(0, 0, 'G', 1), (1, 0, 'G', -1)],
+                nrows = nfaces, ncols = nfaces,
+                n_gpus = n_gpus, device_ids = device_ids)
+        self._G1 = dm_G1.to_host()
+        dm_G1.free()
+        if _CUPY_OK_ITER:
+            _cp_iter.get_default_memory_pool().free_all_blocks()
+
+        dm_H1 = _distributed_block_assemble(
+                green, enei,
+                ncomb_list = [(0, 0, 'H1', 1), (1, 0, 'H1', -1)],
+                nrows = nfaces, ncols = nfaces,
+                n_gpus = n_gpus, device_ids = device_ids)
+        self._H1 = dm_H1.to_host()
+        dm_H1.free()
+        if _CUPY_OK_ITER:
+            _cp_iter.get_default_memory_pool().free_all_blocks()
+
+        dm_G2 = _distributed_block_assemble(
+                green, enei,
+                ncomb_list = [(1, 1, 'G', 1), (0, 1, 'G', -1)],
+                nrows = nfaces, ncols = nfaces,
+                n_gpus = n_gpus, device_ids = device_ids)
+        self._G2 = dm_G2.to_host()
+        dm_G2.free()
+        if _CUPY_OK_ITER:
+            _cp_iter.get_default_memory_pool().free_all_blocks()
+
+        dm_H2 = _distributed_block_assemble(
+                green, enei,
+                ncomb_list = [(1, 1, 'H2', 1), (0, 1, 'H2', -1)],
+                nrows = nfaces, ncols = nfaces,
+                n_gpus = n_gpus, device_ids = device_ids)
+        self._H2 = dm_H2.to_host()
+        dm_H2.free()
+        if _CUPY_OK_ITER:
+            _cp_iter.cuda.runtime.deviceSynchronize()
+            _cp_iter.get_default_memory_pool().free_all_blocks()
+            _cp_iter.get_default_pinned_memory_pool().free_all_blocks()
+        _gpu_pool_cleanup_iter()
 
     @staticmethod
     def _gpu_mfun_enabled() -> bool:

@@ -158,6 +158,92 @@ if NUMBA_AVAILABLE:
                 rz_out[i, j] = rz
         return d_out, inv_d_out, ndr_out, rx_out, ry_out, rz_out
 
+    @njit(parallel = True, fastmath = False, cache = True)
+    def _green_ret_dGF_slice(pos1, pos2, nvec1, same, col_offset):
+        """
+        Build distance d, inv_d, n_dot_r for a column slice of pos2.
+
+        Operates on pos2 already sliced to ``pos2[col_start:col_stop]``;
+        ``col_offset`` is the global column index of pos2[0] in the
+        original ``self.p2.pos``.  Used to detect the diagonal in the
+        self-block case: ``row i corresponds to col i - col_offset``,
+        so the diagonal entry of the slice is at ``(j + col_offset, j)``.
+        """
+        n1 = pos1.shape[0]
+        n2 = pos2.shape[0]
+        d_out = np.empty((n1, n2))
+        inv_d_out = np.empty((n1, n2))
+        ndr_out = np.empty((n1, n2))
+        for i in prange(n1):
+            p0 = pos1[i, 0]
+            p1 = pos1[i, 1]
+            p2 = pos1[i, 2]
+            nx = nvec1[i, 0]
+            ny = nvec1[i, 1]
+            nz = nvec1[i, 2]
+            for j in range(n2):
+                rx = p0 - pos2[j, 0]
+                ry = p1 - pos2[j, 1]
+                rz = p2 - pos2[j, 2]
+                d2 = rx * rx + ry * ry + rz * rz
+                d = d2 ** 0.5
+                if same and i == (j + col_offset):
+                    d = _EPS
+                    inv_d = 1.0 / _EPS
+                    ndotr = 0.0
+                else:
+                    if d < _EPS:
+                        d = _EPS
+                    inv_d = 1.0 / d
+                    ndotr = nx * rx + ny * ry + nz * rz
+                d_out[i, j] = d
+                inv_d_out[i, j] = inv_d
+                ndr_out[i, j] = ndotr
+        return d_out, inv_d_out, ndr_out
+
+    @njit(parallel = True, fastmath = False, cache = True)
+    def _green_ret_dGFr_slice(pos1, pos2, nvec1, same, col_offset):
+        """
+        Like _green_ret_dGF_slice but also returns rx, ry, rz components.
+        """
+        n1 = pos1.shape[0]
+        n2 = pos2.shape[0]
+        d_out = np.empty((n1, n2))
+        inv_d_out = np.empty((n1, n2))
+        ndr_out = np.empty((n1, n2))
+        rx_out = np.empty((n1, n2))
+        ry_out = np.empty((n1, n2))
+        rz_out = np.empty((n1, n2))
+        for i in prange(n1):
+            p0 = pos1[i, 0]
+            p1 = pos1[i, 1]
+            p2 = pos1[i, 2]
+            nx = nvec1[i, 0]
+            ny = nvec1[i, 1]
+            nz = nvec1[i, 2]
+            for j in range(n2):
+                rx = p0 - pos2[j, 0]
+                ry = p1 - pos2[j, 1]
+                rz = p2 - pos2[j, 2]
+                d2 = rx * rx + ry * ry + rz * rz
+                d = d2 ** 0.5
+                if same and i == (j + col_offset):
+                    d = _EPS
+                    inv_d = 1.0 / _EPS
+                    ndotr = 0.0
+                else:
+                    if d < _EPS:
+                        d = _EPS
+                    inv_d = 1.0 / d
+                    ndotr = nx * rx + ny * ry + nz * rz
+                d_out[i, j] = d
+                inv_d_out[i, j] = inv_d
+                ndr_out[i, j] = ndotr
+                rx_out[i, j] = rx
+                ry_out[i, j] = ry
+                rz_out[i, j] = rz
+        return d_out, inv_d_out, ndr_out, rx_out, ry_out, rz_out
+
 
 def green_ret_distances(pos1, pos2, nvec1, area2, same, want_r = False):
     """
@@ -199,6 +285,68 @@ def _green_ret_distances_numpy(pos1, pos2, nvec1, area2, same, want_r):
     return d, inv_d, n_dot_r
 
 
+def green_ret_distances_slice(pos1, pos2_slice, nvec1, same, col_offset,
+                              want_r = False):
+    """
+    Compute distances for a column slice of pos2.
+
+    Parameters
+    ----------
+    pos1 : (M, 3)
+    pos2_slice : (ncol, 3)  -- already sliced to pos2[col_start:col_stop]
+    nvec1 : (M, 3)
+    same : bool
+        True when the original p1 is p2.  Required so the diagonal
+        of the self-block (where row index equals global column index)
+        is forced to d=eps.
+    col_offset : int
+        Global column index of pos2_slice[0], i.e., col_start.
+    want_r : bool
+        Also return rx, ry, rz components (needed for cart deriv / Gp).
+
+    Returns
+    -------
+    d, inv_d, n_dot_r              (when want_r is False)
+    d, inv_d, n_dot_r, rx, ry, rz  (when want_r is True)
+    """
+    pos1 = np.ascontiguousarray(pos1, dtype = np.float64)
+    pos2_slice = np.ascontiguousarray(pos2_slice, dtype = np.float64)
+    nvec1 = np.ascontiguousarray(nvec1, dtype = np.float64)
+
+    if numba_enabled():
+        if want_r:
+            return _green_ret_dGFr_slice(
+                pos1, pos2_slice, nvec1, same, int(col_offset))
+        return _green_ret_dGF_slice(
+            pos1, pos2_slice, nvec1, same, int(col_offset))
+
+    # Numpy fallback (no numba): broadcast straight; same/col_offset
+    # handled by manual post-fix below.
+    rx = pos1[:, 0:1] - pos2_slice[:, 0]
+    ry = pos1[:, 1:2] - pos2_slice[:, 1]
+    rz = pos1[:, 2:3] - pos2_slice[:, 2]
+    d = np.sqrt(rx * rx + ry * ry + rz * rz)
+    d = np.maximum(d, np.finfo(float).eps)
+    n_dot_r = (nvec1[:, 0:1] * rx +
+               nvec1[:, 1:2] * ry +
+               nvec1[:, 2:3] * rz)
+    if same:
+        n1 = pos1.shape[0]
+        ncol = pos2_slice.shape[0]
+        # Diagonal of self-block: row i, col j where i == j + col_offset.
+        # The valid j range is intersection of [0, ncol) with [-col_offset, n1-col_offset).
+        j_lo = max(0, -int(col_offset))
+        j_hi = min(ncol, n1 - int(col_offset))
+        for j in range(j_lo, j_hi):
+            i = j + int(col_offset)
+            d[i, j] = np.finfo(float).eps
+            n_dot_r[i, j] = 0.0
+    inv_d = 1.0 / d
+    if want_r:
+        return d, inv_d, n_dot_r, rx, ry, rz
+    return d, inv_d, n_dot_r
+
+
 # ------------------------------------------------------------------ GPU path
 #
 # The GPU helpers below mirror the numba kernels but execute as cupy
@@ -235,6 +383,63 @@ def green_ret_distances_gpu(pos1, pos2, nvec1, area2, same, want_r=False):
         idx = _cp.arange(n)
         d[idx, idx] = _EPS
         n_dot_r[idx, idx] = 0.0
+    inv_d = 1.0 / d
+
+    if want_r:
+        return d, inv_d, n_dot_r, rx, ry, rz
+    return d, inv_d, n_dot_r
+
+
+def green_ret_distances_slice_gpu(pos1, pos2_slice, nvec1, same, col_offset,
+                                   want_r = False):
+    """
+    Column-sliced GPU version of green_ret_distances.
+
+    Parameters
+    ----------
+    pos1 : (M, 3)
+    pos2_slice : (ncol, 3)  -- already sliced to pos2[col_start:col_stop]
+    nvec1 : (M, 3)
+    same : bool
+        True when original p1 is p2.  Diagonal entries of the self-block
+        (row i, col j where i == j + col_offset) are forced to d=eps.
+    col_offset : int
+        Global column index of pos2_slice[0].
+    want_r : bool
+        Also return rx, ry, rz components.
+
+    Returns
+    -------
+    Same shape as green_ret_distances_gpu but with (M, ncol) instead of
+    (M, N).
+    """
+    if not CUPY_AVAILABLE:
+        raise RuntimeError("cupy is not available; cannot use GPU path")
+
+    pos1g = _cp.asarray(pos1, dtype=_cp.float64)
+    pos2g = _cp.asarray(pos2_slice, dtype=_cp.float64)
+    nvec1g = _cp.asarray(nvec1, dtype=_cp.float64)
+
+    rx = pos1g[:, 0:1] - pos2g[:, 0]
+    ry = pos1g[:, 1:2] - pos2g[:, 1]
+    rz = pos1g[:, 2:3] - pos2g[:, 2]
+    d = _cp.sqrt(rx * rx + ry * ry + rz * rz)
+    d = _cp.maximum(d, _EPS)
+    n_dot_r = (nvec1g[:, 0:1] * rx +
+               nvec1g[:, 1:2] * ry +
+               nvec1g[:, 2:3] * rz)
+    if same:
+        n1 = pos1g.shape[0]
+        ncol = pos2g.shape[0]
+        co = int(col_offset)
+        # j range where (j + co) is a valid row in [0, n1)
+        j_lo = max(0, -co)
+        j_hi = min(ncol, n1 - co)
+        if j_hi > j_lo:
+            j_idx = _cp.arange(j_lo, j_hi)
+            i_idx = j_idx + co
+            d[i_idx, j_idx] = _EPS
+            n_dot_r[i_idx, j_idx] = 0.0
     inv_d = 1.0 / d
 
     if want_r:

@@ -541,6 +541,190 @@ class CompGreenRet(object):
             # Compute selected matrix elements
             return self._eval2(i, j, key, enei, ind)
 
+    def eval_block(self, i, j, key, enei, col_start, col_stop):
+        """
+        Evaluate a column slice of the retarded Green function.
+
+        Computes only the columns ``[col_start, col_stop)`` of the
+        ``(p1.n, p2.n)`` Green function matrix that :meth:`eval` would
+        return for the same ``(i, j, key, enei)``.  The output has
+        shape ``(p1.n, col_stop - col_start)`` for scalar keys (G/F/H1/H2)
+        and ``(p1.n, 3, col_stop - col_start)`` for derivative keys
+        (Gp/H1p/H2p).
+
+        Memory-efficient: avoids allocating the full ``(M, N)`` matrix.
+        Designed to plug into ``DistributedMatrix.from_func`` so each
+        GPU computes only the column tile it will end up owning::
+
+            G = DistributedMatrix.from_func(
+                shape=(nfaces, nfaces),
+                dtype=np.complex128,
+                n_gpus=n_gpus,
+                eval_func=lambda gpu_idx, c0, c1:
+                    compgreen.eval_block(1, 1, 'G', enei, c0, c1),
+            )
+
+        Parameters
+        ----------
+        i, j : int
+            Region indices (same semantics as :meth:`eval`).
+        key : str
+            Green function key (G/F/H1/H2/Gp/H1p/H2p).
+        enei : float
+            Wavelength in vacuum (nm).
+        col_start : int
+            Inclusive lower bound of the column range (global p2 index).
+        col_stop : int
+            Exclusive upper bound of the column range.
+
+        Returns
+        -------
+        g : ndarray
+            Sliced Green function tile.  ``np.allclose(g, eval(i, j, key,
+            enei)[..., col_start:col_stop])`` holds to floating-point
+            ufunc-ordering tolerance.
+
+        Notes
+        -----
+        - ``eval_block(0, n2)`` is equivalent to :meth:`eval`.
+        - Bypasses the H-matrix / hmode path (raises NotImplementedError);
+          distributed dense build is for the dense BEM path only.
+        - GPU output stays on device when ``MNPBEM_GPU_NATIVE=1``, so the
+          ``DistributedMatrix.from_func`` callback never round-trips to
+          host.
+        """
+        if self.hmode is not None or getattr(self, 'hmat', None) is not None:
+            raise NotImplementedError(
+                "[error] eval_block does not support hmode/H-matrix; "
+                "use the dense path (hmatrix=False)."
+            )
+        col_start = int(col_start)
+        col_stop = int(col_stop)
+        assert 0 <= col_start <= col_stop <= self.p2.n, \
+            ("[error] eval_block col range ({}, {}) out of bounds for p2.n={}"
+             .format(col_start, col_stop, self.p2.n))
+        return self._eval_block(i, j, key, enei, col_start, col_stop)
+
+    def _eval_block(self, i, j, key, enei, col_start, col_stop):
+        """
+        Block-level slice evaluation for a region pair.
+
+        Same algorithm as :meth:`_eval1` but with each ``self.g[i1][i2]``
+        block restricted to the intersection of its columns with the
+        requested global column range.  Blocks that don't overlap the
+        range are skipped entirely (no allocation).
+        """
+        con = self.con[i][j]
+
+        # Evaluate dielectric functions to get wavenumbers
+        k_list = []
+        for eps_func in self.p1.eps:
+            eps_val, k_val = eps_func(enei)
+            k_list.append(k_val)
+
+        # Detect cupy ndarrays from block.eval (for on-device assembly).
+        try:
+            import cupy as _cp_local  # type: ignore
+        except Exception:
+            _cp_local = None
+
+        ncol_out = col_stop - col_start
+        siz2 = [p.n for p in self.p2.p]
+        # Cumulative column offsets in the composite p2
+        col_offsets = [0]
+        for s in siz2:
+            col_offsets.append(col_offsets[-1] + s)
+
+        # Scalar keys (G, F, H1, H2) -> (n1, ncol) result.
+        # Derivative keys (Gp, H1p, H2p) -> (n1, 3, ncol) result.
+        scalar_key = key not in ('Gp', 'H1p', 'H2p')
+
+        if scalar_key:
+            g_out = None
+            xp = np
+            npart1, npart2 = con.shape
+            for i1 in range(npart1):
+                for i2 in range(npart2):
+                    if con[i1, i2] <= 0:
+                        continue
+                    # Block in global col coordinates
+                    blk_g0 = col_offsets[i2]
+                    blk_g1 = col_offsets[i2 + 1]
+                    # Intersect with requested range
+                    g0 = max(blk_g0, col_start)
+                    g1 = min(blk_g1, col_stop)
+                    if g0 >= g1:
+                        continue
+                    # Local col range within this block
+                    local_c0 = g0 - blk_g0
+                    local_c1 = g1 - blk_g0
+                    # Output col range
+                    out_c0 = g0 - col_start
+                    out_c1 = g1 - col_start
+
+                    idx1 = self.p1.index_func(i1 + 1)
+                    k_block = k_list[con[i1, i2] - 1]
+
+                    g_block = self.g[i1][i2].eval(
+                        k_block, key, col_range = (local_c0, local_c1))
+
+                    if g_out is None:
+                        if (_cp_local is not None
+                                and isinstance(g_block, _cp_local.ndarray)):
+                            xp = _cp_local
+                        g_out = xp.zeros((self.p1.n, ncol_out), dtype = complex)
+                    if (xp is np and _cp_local is not None
+                            and isinstance(g_block, _cp_local.ndarray)):
+                        g_block = _cp_local.asnumpy(g_block)
+                    elif (xp is _cp_local
+                            and not isinstance(g_block, _cp_local.ndarray)):
+                        g_block = _cp_local.asarray(g_block)
+                    g_out[xp.ix_(idx1, range(out_c0, out_c1))] = g_block
+            if g_out is None:
+                g_out = np.zeros((self.p1.n, ncol_out), dtype = complex)
+            return g_out
+
+        # Derivative case: (n1, 3, ncol)
+        g_out = None
+        xp = np
+        npart1, npart2 = con.shape
+        for i1 in range(npart1):
+            for i2 in range(npart2):
+                if con[i1, i2] <= 0:
+                    continue
+                blk_g0 = col_offsets[i2]
+                blk_g1 = col_offsets[i2 + 1]
+                g0 = max(blk_g0, col_start)
+                g1 = min(blk_g1, col_stop)
+                if g0 >= g1:
+                    continue
+                local_c0 = g0 - blk_g0
+                local_c1 = g1 - blk_g0
+                out_c0 = g0 - col_start
+                out_c1 = g1 - col_start
+
+                idx1 = self.p1.index_func(i1 + 1)
+                k_block = k_list[con[i1, i2] - 1]
+
+                g_block = self.g[i1][i2].eval(
+                    k_block, key, col_range = (local_c0, local_c1))
+
+                if g_out is None:
+                    if (_cp_local is not None
+                            and isinstance(g_block, _cp_local.ndarray)):
+                        xp = _cp_local
+                    g_out = xp.zeros((self.p1.n, 3, ncol_out), dtype = complex)
+                if (xp is np and _cp_local is not None
+                        and isinstance(g_block, _cp_local.ndarray)):
+                    g_block = _cp_local.asnumpy(g_block)
+                elif (xp is _cp_local
+                        and not isinstance(g_block, _cp_local.ndarray)):
+                    g_block = _cp_local.asarray(g_block)
+                g_out[xp.ix_(idx1, range(3), range(out_c0, out_c1))] = g_block
+        if g_out is None:
+            g_out = np.zeros((self.p1.n, 3, ncol_out), dtype = complex)
+        return g_out
+
     def _eval1(self, i, j, key, enei):
         """
         Evaluate retarded Green function (full matrix) for region pair (i,j).
@@ -1406,7 +1590,7 @@ class GreenRetBlock(object):
                 # This allows fallback if particle types don't support refinement
                 self.refined = None
 
-    def eval(self, k, key):
+    def eval(self, k, key, col_range = None):
         """
         Evaluate Green function for this block.
 
@@ -1416,17 +1600,42 @@ class GreenRetBlock(object):
         1. Compute G = 1/d * area (without phase)
         2. Apply refinement (if needed)
         3. Multiply by phase: G = G .* exp(ikd)
+
+        Parameters
+        ----------
+        k : float
+            Wavenumber.
+        key : str
+            'G', 'F', 'H1', 'H2', 'Gp', 'H1p', 'H2p'.
+        col_range : tuple of (int, int), optional
+            Local column range ``[col_start, col_stop)`` within this
+            block's p2 axis.  When given the returned matrix has shape
+            ``(n1, col_stop - col_start)`` (or ``(n1, 3, ncol)`` for
+            derivative keys) instead of the full ``(n1, n2)``.
+
+            Used by :meth:`CompGreenRet.eval_block` for distributed
+            column-tile build.  None (default) preserves backward
+            compatibility — the full block is returned.
         """
         # Use refined Green function if available
         if self.refined is not None:
-            return self.refined.eval(k, key)
+            return self.refined.eval(k, key, col_range = col_range)
 
         # Fallback to simple approximation (if refinement not initialized)
         # Compute Green function matrices
         pos1 = self.p1.pos
-        pos2 = self.p2.pos
+        pos2_full = self.p2.pos
         nvec1 = self.p1.nvec
-        area2 = self.p2.area
+        area2_full = self.p2.area
+
+        if col_range is None:
+            pos2 = pos2_full
+            area2 = area2_full
+            col_start = 0
+        else:
+            col_start, col_stop = int(col_range[0]), int(col_range[1])
+            pos2 = pos2_full[col_start:col_stop]
+            area2 = area2_full[col_start:col_stop]
 
         n1 = pos1.shape[0]
         n2 = pos2.shape[0]
@@ -1471,43 +1680,81 @@ class GreenRetBlock(object):
             return F
 
         elif key == 'H1':
-            H1 = self.eval(k, 'F')
+            H1 = self.eval(k, 'F', col_range = col_range)
             if self.p1 is self.p2:
-                np.fill_diagonal(H1, np.diag(H1) + 2.0 * np.pi)
+                if col_range is None:
+                    np.fill_diagonal(H1, np.diag(H1) + 2.0 * np.pi)
+                else:
+                    self._add_slice_diagonal(H1, col_start, n1, +2.0 * np.pi)
             return H1
 
         elif key == 'H2':
-            H2 = self.eval(k, 'F')
+            H2 = self.eval(k, 'F', col_range = col_range)
             if self.p1 is self.p2:
-                np.fill_diagonal(H2, np.diag(H2) - 2.0 * np.pi)
+                if col_range is None:
+                    np.fill_diagonal(H2, np.diag(H2) - 2.0 * np.pi)
+                else:
+                    self._add_slice_diagonal(H2, col_start, n1, -2.0 * np.pi)
             return H2
 
         elif key == 'Gp':
             # MATLAB: f = (ik - 1/d) / d^2; Gp = f .* [x,y,z] * area * exp(ikd)
             phase = np.exp(1j * k * d)
-            r_vec = np.stack([x, y, z], axis = 2)  # (n1, n2, 3)
+            r_vec = np.stack([x, y, z], axis = 2)  # (n1, ncol, 3)
             Gp_factor = phase * (1j * k - 1.0 / d) / (d ** 2)
             Gp = r_vec * Gp_factor[:, :, np.newaxis] * area2[np.newaxis, :, np.newaxis]
             return np.transpose(Gp, (0, 2, 1))
 
         elif key == 'H1p':
-            H1p = self.eval(k, 'Gp')
+            H1p = self.eval(k, 'Gp', col_range = col_range)
             if self.p1 is self.p2:
                 nvec = self.p1.nvec
-                for i in range(len(nvec)):
-                    H1p[i, :, i] += 2 * np.pi * nvec[i]
+                if col_range is None:
+                    for i in range(len(nvec)):
+                        H1p[i, :, i] += 2 * np.pi * nvec[i]
+                else:
+                    ncol = H1p.shape[2]
+                    j_lo = max(0, -col_start)
+                    j_hi = min(ncol, n1 - col_start)
+                    for j in range(j_lo, j_hi):
+                        i = j + col_start
+                        H1p[i, :, j] += 2 * np.pi * nvec[i]
             return H1p
 
         elif key == 'H2p':
-            H2p = self.eval(k, 'Gp')
+            H2p = self.eval(k, 'Gp', col_range = col_range)
             if self.p1 is self.p2:
                 nvec = self.p1.nvec
-                for i in range(len(nvec)):
-                    H2p[i, :, i] -= 2 * np.pi * nvec[i]
+                if col_range is None:
+                    for i in range(len(nvec)):
+                        H2p[i, :, i] -= 2 * np.pi * nvec[i]
+                else:
+                    ncol = H2p.shape[2]
+                    j_lo = max(0, -col_start)
+                    j_hi = min(ncol, n1 - col_start)
+                    for j in range(j_lo, j_hi):
+                        i = j + col_start
+                        H2p[i, :, j] -= 2 * np.pi * nvec[i]
             return H2p
 
         else:
             raise ValueError("Unknown key: {}".format(key))
+
+    @staticmethod
+    def _add_slice_diagonal(mat, col_start, n1, scalar):
+        """Add ``scalar`` to mat[i, j] where i == j + col_start.
+
+        Used by the fallback (non-refined) eval path for H1/H2 slice
+        diagonal correction.
+        """
+        ncol = mat.shape[1]
+        j_lo = max(0, -int(col_start))
+        j_hi = min(ncol, n1 - int(col_start))
+        if j_hi <= j_lo:
+            return
+        j_idx = np.arange(j_lo, j_hi)
+        i_idx = j_idx + int(col_start)
+        mat[i_idx, j_idx] = mat[i_idx, j_idx] + scalar
 
     def eval_ind(self, k, key, ind):
         """Evaluate selected elements efficiently.

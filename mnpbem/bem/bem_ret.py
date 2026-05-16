@@ -67,6 +67,46 @@ def _bem_native_gpu() -> bool:
     return os.environ.get('MNPBEM_GPU_NATIVE', '1') != '0'
 
 
+def _vram_share_active() -> bool:
+    """Detect whether the distributed multi-GPU build path is active.
+
+    The distributed *build* path (not just LU dispatch) is gated by all
+    of these conditions together:
+    - ``MNPBEM_GPU=1``                       (GPU mode enabled)
+    - ``MNPBEM_VRAM_SHARE=1``                (master switch on, default '0')
+    - ``MNPBEM_VRAM_SHARE_DISTRIBUTED=1``    (distributed-build gate, default '0')
+    - ``MNPBEM_VRAM_SHARE_GPUS>=2``           (>=2 GPUs requested)
+    - cupy is importable                      (device available at all)
+
+    The DISTRIBUTED gate matches the pattern other solvers
+    (bem_ret_iter, bem_ret_layer_iter, bem_ret_layer, bem_ret_mirror)
+    use, so users on the existing LU-only multi-GPU path
+    (``MNPBEM_VRAM_SHARE=1`` + ``MNPBEM_VRAM_SHARE_GPUS=N`` without the
+    DISTRIBUTED flag) do not accidentally fall into the column-split
+    Green-function build.
+
+    When False, callers fall back to ``_init_gpu_assemble`` (single-GPU
+    cupy-eager build) or ``_init_host_assemble`` (the pure-CPU legacy
+    path below).
+    """
+    if not _CUPY_OK_A2:
+        return False
+    if os.environ.get('MNPBEM_GPU', '0') != '1':
+        return False
+    if os.environ.get('MNPBEM_VRAM_SHARE', '0').strip() != '1':
+        return False
+    if os.environ.get('MNPBEM_VRAM_SHARE_DISTRIBUTED', '0').strip() != '1':
+        return False
+    raw = os.environ.get('MNPBEM_VRAM_SHARE_GPUS', '').strip()
+    if not raw:
+        return False
+    try:
+        n_gpus = int(raw)
+    except ValueError:
+        return False
+    return n_gpus >= 2
+
+
 class BEMRet(object):
     """
     BEM solver for full Maxwell equations (retarded).
@@ -242,6 +282,26 @@ class BEMRet(object):
         # Skip if already initialized at this energy
         if self.enei is not None and np.isclose(self.enei, enei):
             return self
+
+        # B-3 distributed multi-GPU build (v1.8): when MNPBEM_VRAM_SHARE_GPUS>=2
+        # the BEM matrices are partitioned across N GPUs from the build phase
+        # itself, never materializing a single-GPU (N, N) tile. This is the
+        # real path for >12k-face dimers where the 47 GB Sigma exceeds the
+        # 49 GB single-GPU cap. Falls back to the single-GPU fast path
+        # below when distributed assembly is not requested or unavailable.
+        # Schur option (v1.2.0) only supported on the CPU path today.
+        if _vram_share_active() and not self._schur_opt:
+            try:
+                self._init_distributed_assemble(enei)
+                return self
+            except Exception as _dist_exc:
+                import warnings as _w
+                _w.warn(
+                    '[warn] BEMRet distributed assembly failed ({}); '
+                    'falling back to single-GPU / CPU.'.format(_dist_exc),
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
 
         # Lane A2: route the heavy assembly through a cupy-eager fast path
         # when the GPU is enabled.  This keeps every intermediate
@@ -734,6 +794,426 @@ class BEMRet(object):
         del lu1, piv1, lu2, piv2, lu_d, piv_d, lu_s, piv_s
         cp.cuda.runtime.deviceSynchronize()
         _mempool.free_all_blocks()
+        cp.get_default_pinned_memory_pool().free_all_blocks()
+        return self
+
+    def _init_distributed_assemble(self, enei):
+        """B-3 distributed multi-GPU BEM matrix assembly.
+
+        Builds G1/G2/H1/H2 directly distributed across N GPUs (using
+        ``DistributedMatrix.from_func`` + ``CompGreenRet.eval_block`` so
+        each device computes only its own column tile). The four LU
+        factorizations (G1, G2, Delta, Sigma) are then performed on the
+        distributed tiles via ``cuSolverMg`` block-cyclic Getrf — no
+        single-GPU (N, N) buffer is ever allocated.
+
+        Memory characteristic (n_gpus=N):
+        - Per-GPU peak: ~4 * N_faces^2 * 16 / n_gpus bytes (build phase
+          holds G_ij + H_ij residuals before merge).
+        - Host peak: ``Sigma1`` and ``Sigma`` materialized once for the
+          host @ L1 / L2 products and the final Sigma factor input.
+
+        Result residency
+        ----------------
+        - ``self.G1_lu``, ``self.G2_lu``, ``self.Delta_lu``, ``self.Sigma_lu``
+          are stored as ``('mgpu', MultiGPULU_handle, None)`` tuples.
+          ``lu_solve_dispatch`` already routes that tag through
+          ``MultiGPULU.solve`` so downstream ``BEMRet.solve`` consumers
+          don't change.
+        - ``self.Sigma1``, ``self.L1``, ``self.L2``, ``self.nvec``,
+          ``self.eps1``, ``self.eps2`` are host numpy arrays (no
+          ``GPU_NATIVE`` shortcut on this path; the matrices are too
+          large for a single device).
+
+        Bit-identity contract (vs single-GPU ``_init_gpu_assemble``):
+        cuBLAS/cuSolverMg arithmetic differs from the legacy CPU path by
+        floating-point rounding (~N * eps_machine relative). The
+        distributed path adds no extra rounding beyond what the
+        per-block GEMM/LU already do, so the result matches the
+        cuSolverMg single-GPU build to within Frobenius ~1e-12.
+        """
+        import gc as _gc
+        from ..utils.distributed_matrix import DistributedMatrix
+        cp = _cp_a2
+
+        n_gpus = int(os.environ.get('MNPBEM_VRAM_SHARE_GPUS', '2'))
+        # device_ids: honour MNPBEM_VRAM_SHARE_DEVICE_IDS, else default [0..n_gpus).
+        devs_raw = os.environ.get('MNPBEM_VRAM_SHARE_DEVICE_IDS', '').strip()
+        if devs_raw:
+            try:
+                device_ids = [int(x) for x in devs_raw.split(',') if x.strip()]
+            except ValueError:
+                device_ids = list(range(n_gpus))
+        else:
+            device_ids = list(range(n_gpus))
+        assert len(device_ids) == n_gpus, \
+            '[error] MNPBEM_VRAM_SHARE_DEVICE_IDS length must equal MNPBEM_VRAM_SHARE_GPUS'
+
+        # v1.7-style upfront cleanup: when the same BEMRet is reused across
+        # a wavelength sweep, release the previous wavelength's distributed
+        # LU handles and host matrices before re-allocating.
+        for _attr in ('G1_lu', 'G2_lu', 'Delta_lu', 'Sigma_lu',
+                      'Sigma1', 'L1', 'L2', 'nvec', 'eps1', 'eps2'):
+            old = getattr(self, _attr, None)
+            if old is None:
+                continue
+            # 'mgpu' tag: close the MultiGPULU handle AND drop the
+            # keepalive DistributedMatrix that owned the device tiles.
+            if (isinstance(old, tuple) and len(old) == 3
+                    and old[0] == 'mgpu' and old[1] is not None):
+                handle = old[1]
+                try:
+                    handle.close()
+                except Exception:
+                    pass
+                # The handle's tiles were owned by a DistributedMatrix
+                # attached as ``_distmat_keepalive``. Releasing it now
+                # actually frees the per-GPU memory; the prior close()
+                # only released IPIV / workspace / cusolverMg objects.
+                dm_old = getattr(handle, '_distmat_keepalive', None)
+                if dm_old is not None:
+                    try:
+                        dm_old.free()
+                    except Exception:
+                        pass
+                    try:
+                        handle._distmat_keepalive = None
+                    except Exception:
+                        pass
+            setattr(self, _attr, None)
+        _gc.collect()
+        for d in device_ids:
+            cp.cuda.runtime.setDevice(d)
+            cp.cuda.runtime.deviceSynchronize()
+            cp.get_default_memory_pool().free_all_blocks()
+        cp.get_default_pinned_memory_pool().free_all_blocks()
+
+        self.enei = enei
+        self.nvec = self.p.nvec
+        self.k = 2 * np.pi / enei
+
+        # Dielectric scalars / arrays on host.
+        eps1_vals = self.p.eps1(enei)
+        eps2_vals = self.p.eps2(enei)
+        if (np.allclose(eps1_vals, eps1_vals[0])
+                and np.allclose(eps2_vals, eps2_vals[0])):
+            self.eps1 = eps1_vals[0]
+            self.eps2 = eps2_vals[0]
+            scalar_eps = True
+        else:
+            self.eps1 = np.diag(eps1_vals)
+            self.eps2 = np.diag(eps2_vals)
+            scalar_eps = False
+
+        if not hasattr(self, 'g') or self.g is None:
+            self.g = CompGreenRet(self.p, self.p)
+
+        N = self.p.nfaces
+        dtype = np.complex128
+
+        # ------------------------------------------------------------------
+        # cuSolverMg.solve numerical fix: the binary loses precision when
+        # the RHS column count approaches N (rel ~ 5e-3 at ncol/N ~ 0.95).
+        # Below ~2048 columns the result is bit-identical to CPU. To get
+        # an accurate N x N inverse (needed for Sigma_i = H_i @ G_i^{-1}
+        # and Deltai), we chunk the solve into smaller column blocks.
+        # Configurable via MNPBEM_VRAM_SHARE_SOLVE_CHUNK (default 1024).
+        # ------------------------------------------------------------------
+        try:
+            solve_chunk = int(os.environ.get(
+                'MNPBEM_VRAM_SHARE_SOLVE_CHUNK', '1024'))
+        except (TypeError, ValueError):
+            solve_chunk = 1024
+        if solve_chunk < 16:
+            solve_chunk = 16
+
+        def _mg_solve_chunked(mg_handle, B_full):
+            # B_full: numpy ndarray shape (N,) or (N, nrhs). For nrhs<=
+            # solve_chunk we hand it through directly; otherwise we split
+            # along columns and concatenate.
+            if B_full.ndim == 1 or B_full.shape[1] <= solve_chunk:
+                return mg_handle.solve(B_full)
+            n_rows, n_cols = B_full.shape
+            out = np.empty_like(B_full)
+            for c0 in range(0, n_cols, solve_chunk):
+                c1 = min(c0 + solve_chunk, n_cols)
+                out[:, c0:c1] = mg_handle.solve(
+                    np.ascontiguousarray(B_full[:, c0:c1]))
+            return out
+
+        # --------------------------------------------------------------
+        # Per-block eval_func helpers. Each builds one column tile by
+        # calling CompGreenRet.eval_block for the two cross-region terms
+        # that contribute to the corresponding BEM matrix and subtracting
+        # in place. ``eval_block`` returns either a host numpy ndarray or
+        # a cupy ndarray (when MNPBEM_GPU_NATIVE=1 and the green-function
+        # path supports it). DistributedMatrix.from_func handles either
+        # — it uploads numpy returns to the owning GPU automatically.
+        # The eval_func runs INSIDE ``cp.cuda.Device(gpu_idx)``, so the
+        # returned cupy array (when present) ends up on the right device.
+        # --------------------------------------------------------------
+        compg = self.g
+        # Use a helper that handles the closed-surface case where the
+        # cross-region eval returns 0 (single particle, no junction).
+        # When CompGreenRet returns cupy for one term and numpy zeros for
+        # the other (e.g. con[0,0]!=0 produces cupy, con[1,0]==0 produces
+        # numpy zeros), normalize both to the same backend before the
+        # subtraction. The eval_func runs inside ``cp.cuda.Device(gpu_idx)``
+        # so the upload lands on the right device.
+        def _safe_eval_block(i, j, key, c0, c1):
+            blk = compg.eval_block(i, j, key, enei, c0, c1)
+            if isinstance(blk, int) and blk == 0:
+                return np.zeros((N, c1 - c0), dtype=dtype)
+            return blk
+
+        def _diff(a, b):
+            # Coerce to the cupy backend when either operand is cupy.
+            if isinstance(a, cp.ndarray) or isinstance(b, cp.ndarray):
+                if not isinstance(a, cp.ndarray):
+                    a = cp.asarray(a, dtype=dtype)
+                if not isinstance(b, cp.ndarray):
+                    b = cp.asarray(b, dtype=dtype)
+            return a - b
+
+        def _eval_G1(gpu_idx, c0, c1):
+            a = _safe_eval_block(0, 0, 'G', c0, c1)
+            b = _safe_eval_block(1, 0, 'G', c0, c1)
+            return _diff(a, b)
+
+        def _eval_G2(gpu_idx, c0, c1):
+            a = _safe_eval_block(1, 1, 'G', c0, c1)
+            b = _safe_eval_block(0, 1, 'G', c0, c1)
+            return _diff(a, b)
+
+        def _eval_H1(gpu_idx, c0, c1):
+            a = _safe_eval_block(0, 0, 'H1', c0, c1)
+            b = _safe_eval_block(1, 0, 'H1', c0, c1)
+            return _diff(a, b)
+
+        def _eval_H2(gpu_idx, c0, c1):
+            a = _safe_eval_block(1, 1, 'H2', c0, c1)
+            b = _safe_eval_block(0, 1, 'H2', c0, c1)
+            return _diff(a, b)
+
+        # --------------------------------------------------------------
+        # 1) Build G1, G2 distributed -> factor in place.
+        # --------------------------------------------------------------
+        G1_dm = DistributedMatrix.from_func(
+            shape=(N, N), dtype=dtype, n_gpus=n_gpus,
+            device_ids=device_ids, eval_func=_eval_G1)
+
+        # Optional user refun (coverlayer.refine). Refun is host numpy
+        # only; we have to gather/refine/scatter. Memory cost: one host
+        # (N, N) ~ 3.6 GB at 15k faces — fine on 503 GB host RAM.
+        if self._refun is not None:
+            G1_h = G1_dm.to_host()
+            # H1 needed too for refun. Build H1 first below.
+
+        # Factor G1 in place. After this call, the distributed tiles of
+        # G1_dm hold the L/U factors; do not reuse G1_dm as a Green
+        # function thereafter (the math equations use only G1^{-1}).
+        # IMPORTANT: ``G1_mglu`` only holds a ctypes pointer array into
+        # ``G1_dm.local_arrays``. We must keep ``G1_dm`` alive (or its
+        # cupy tiles will be GC'd and the LU pointers become dangling).
+        # Attach ``G1_dm`` to ``G1_mglu`` so the lifetimes are joined.
+        G1_mglu = G1_dm.lu_factor()
+        G1_mglu._distmat_keepalive = G1_dm  # type: ignore[attr-defined]
+        self.G1_lu = ('mgpu', G1_mglu, None)
+
+        G2_dm = DistributedMatrix.from_func(
+            shape=(N, N), dtype=dtype, n_gpus=n_gpus,
+            device_ids=device_ids, eval_func=_eval_G2)
+        if self._refun is not None:
+            G2_h = G2_dm.to_host()
+        G2_mglu = G2_dm.lu_factor()
+        G2_mglu._distmat_keepalive = G2_dm  # type: ignore[attr-defined]
+        self.G2_lu = ('mgpu', G2_mglu, None)
+
+        # --------------------------------------------------------------
+        # 2) Build H1, H2 distributed -> gather to host for Sigma_i.
+        #    Sigma_i = H_i @ G_i^{-1}; computed via right-side solve:
+        #        Sigma_i^T = (G_i^T)^{-1} @ H_i^T
+        #    cuSolverMg supports trans='T' on the solve, so we feed
+        #    H_i^T as the RHS (gathered to host) and recover Sigma_i
+        #    via another transpose.
+        # --------------------------------------------------------------
+        H1_dm = DistributedMatrix.from_func(
+            shape=(N, N), dtype=dtype, n_gpus=n_gpus,
+            device_ids=device_ids, eval_func=_eval_H1)
+        H1_host = H1_dm.to_host()
+        H1_dm.free()
+        del H1_dm
+
+        if self._refun is not None:
+            G1_h, H1_host = self._refun(self.g, G1_h, H1_host)
+            # Re-factor G1 with refined data (overwrite mgpu handle).
+            # Free the old LU first to release distributed memory.
+            try:
+                G1_mglu.close()
+            except Exception:
+                pass
+            # Also free the original G1_dm tiles (its ndarrays kept the
+            # device buffers alive while the old LU pointed at them).
+            try:
+                G1_dm.free()
+            except Exception:
+                pass
+            G1_dm_re = DistributedMatrix.from_host(
+                G1_h, n_gpus=n_gpus, device_ids=device_ids)
+            G1_mglu = G1_dm_re.lu_factor()
+            G1_mglu._distmat_keepalive = G1_dm_re  # keep buffers alive
+            self.G1_lu = ('mgpu', G1_mglu, None)
+            del G1_h
+
+        H2_dm = DistributedMatrix.from_func(
+            shape=(N, N), dtype=dtype, n_gpus=n_gpus,
+            device_ids=device_ids, eval_func=_eval_H2)
+        H2_host = H2_dm.to_host()
+        H2_dm.free()
+        del H2_dm
+
+        if self._refun is not None:
+            G2_h, H2_host = self._refun(self.g, G2_h, H2_host)
+            try:
+                G2_mglu.close()
+            except Exception:
+                pass
+            try:
+                G2_dm.free()
+            except Exception:
+                pass
+            G2_dm_re = DistributedMatrix.from_host(
+                G2_h, n_gpus=n_gpus, device_ids=device_ids)
+            G2_mglu = G2_dm_re.lu_factor()
+            G2_mglu._distmat_keepalive = G2_dm_re
+            self.G2_lu = ('mgpu', G2_mglu, None)
+            del G2_h
+
+        # Sigma1 = H1 @ G1^{-1}.
+        # cusolverMgGetrs supports only trans='N' in practice (the 'T' /
+        # 'C' codes return CUSOLVER_STATUS_INVALID_VALUE on the public
+        # ABI). So compute G1^{-1} explicitly via solve(I) once and then
+        # host-multiply with H1. Memory: G1_inv host ~ 3.6 GB at 15k
+        # faces; H1 host already materialized; on a 503 GB host RAM
+        # node both fit comfortably and the (n,n)@(n,n) matmul lands on
+        # MKL with ~7 TFLOPS = ~6 s at N=15k.
+        I_host = np.eye(N, dtype=dtype)
+        G1_inv = _mg_solve_chunked(G1_mglu, I_host)
+        Sigma1_host = np.ascontiguousarray(H1_host @ G1_inv)
+        del G1_inv, H1_host
+
+        G2_inv = _mg_solve_chunked(G2_mglu, I_host)
+        Sigma2_host = np.ascontiguousarray(H2_host @ G2_inv)
+        del G2_inv, H2_host, I_host
+        _gc.collect()
+
+        # G1_dm / G2_dm are now attached to G1_mglu / G2_mglu via the
+        # ``_distmat_keepalive`` attribute (the LU handle's ctypes
+        # pointer array references the cupy tiles in-place; dropping
+        # the DistributedMatrix wrapper before the LU handle is freed
+        # would dangle the pointers). Leave the keepalives wired and
+        # the local Python refs go out of scope on function return.
+        del G1_dm, G2_dm
+
+        # Store Sigma1 as host for downstream solve (matches the CPU
+        # path's residency contract; the dimer-scale matmuls Sigma1 @ a
+        # in solve() run on host where there is ample RAM).
+        self.Sigma1 = Sigma1_host
+
+        # L matrices [Eq. (22)]. For closed surfaces (con[0,1]==0) or
+        # scalar eps, L_i = eps_i directly (no Sigma1-style invert).
+        # Use the underlying CompGreenRet via the ACA-aware proxy.
+        _gobj = self.g.g if (hasattr(self.g, 'g')
+                             and hasattr(self.g.g, 'con')) else self.g
+        if np.all(_gobj.con[0][1] == 0) or scalar_eps:
+            self.L1 = self.eps1
+            self.L2 = self.eps2
+        else:
+            # Full case: L1 = G1 @ eps1 @ G1^{-1}.  Compute via two
+            # distributed solves: X = G1^{-1} @ eps1 (n,n) then
+            # L1 = G1 @ X. Gather G1 once to host for the second matmul
+            # (we lost the dense G1 to the in-place LU; rebuild it via
+            # one extra distributed assembly when refun did not retain
+            # a host copy).
+            if self._refun is not None:
+                G1_h_for_L = G1_h
+                G2_h_for_L = G2_h
+            else:
+                _tmp_G1 = DistributedMatrix.from_func(
+                    shape=(N, N), dtype=dtype, n_gpus=n_gpus,
+                    device_ids=device_ids, eval_func=_eval_G1)
+                G1_h_for_L = _tmp_G1.to_host()
+                _tmp_G1.free()
+                _tmp_G2 = DistributedMatrix.from_func(
+                    shape=(N, N), dtype=dtype, n_gpus=n_gpus,
+                    device_ids=device_ids, eval_func=_eval_G2)
+                G2_h_for_L = _tmp_G2.to_host()
+                _tmp_G2.free()
+            X1 = _mg_solve_chunked(G1_mglu, np.ascontiguousarray(self.eps1))
+            X2 = _mg_solve_chunked(G2_mglu, np.ascontiguousarray(self.eps2))
+            self.L1 = G1_h_for_L @ X1
+            self.L2 = G2_h_for_L @ X2
+            del G1_h_for_L, G2_h_for_L, X1, X2
+            _gc.collect()
+
+        # --------------------------------------------------------------
+        # 3) Delta = Sigma1 - Sigma2 -> distributed LU factor.
+        # --------------------------------------------------------------
+        Delta_host = Sigma1_host - Sigma2_host
+        # Move Delta to distributed tiles and factor.
+        Delta_dm = DistributedMatrix.from_host(
+            Delta_host, n_gpus=n_gpus, device_ids=device_ids)
+        Delta_mglu = Delta_dm.lu_factor()
+        Delta_mglu._distmat_keepalive = Delta_dm
+        self.Delta_lu = ('mgpu', Delta_mglu, None)
+        del Delta_dm  # local ref dropped; keepalive holds device tiles
+
+        # Deltai needed for Sigma combine. Solve on host (one (N, N)
+        # RHS, chunked to work around the MG-LU multi-column solve
+        # precision regression — see _mg_solve_chunked).
+        Deltai_host = _mg_solve_chunked(Delta_mglu, np.eye(N, dtype=dtype))
+        Deltai_host = np.ascontiguousarray(Deltai_host)
+
+        # --------------------------------------------------------------
+        # 4) Combine Sigma matrix (host arithmetic).
+        # --------------------------------------------------------------
+        nvec_outer = self.nvec @ self.nvec.T
+
+        if np.isscalar(self.L1) and np.isscalar(self.L2):
+            L_scalar = self.L1 - self.L2
+            Sigma_host = (Sigma1_host * self.L1) - (Sigma2_host * self.L2)
+            Sigma_host = Sigma_host + (self.k ** 2) * L_scalar * (
+                Deltai_host * nvec_outer) * L_scalar
+        else:
+            L_diff_host = self.L1 - self.L2
+            Sigma_host = (Sigma1_host @ self.L1
+                          - Sigma2_host @ self.L2
+                          + (self.k ** 2)
+                            * ((L_diff_host @ Deltai_host) * nvec_outer)
+                            @ L_diff_host)
+            del L_diff_host
+
+        del Sigma2_host, Deltai_host, nvec_outer
+        _gc.collect()
+
+        # --------------------------------------------------------------
+        # 5) Distribute Sigma -> LU factor; this is the dominant solver
+        #    matrix in BEMRet.solve.
+        # --------------------------------------------------------------
+        Sigma_dm = DistributedMatrix.from_host(
+            Sigma_host, n_gpus=n_gpus, device_ids=device_ids)
+        del Sigma_host
+        _gc.collect()
+        Sigma_mglu = Sigma_dm.lu_factor()
+        Sigma_mglu._distmat_keepalive = Sigma_dm
+        self.Sigma_lu = ('mgpu', Sigma_mglu, None)
+        del Sigma_dm  # local ref dropped; keepalive holds device tiles
+
+        # Final sync + pool compaction across all participating devices.
+        for d in device_ids:
+            cp.cuda.runtime.setDevice(d)
+            cp.cuda.runtime.deviceSynchronize()
+            cp.get_default_memory_pool().free_all_blocks()
         cp.get_default_pinned_memory_pool().free_all_blocks()
         return self
 
@@ -1290,13 +1770,40 @@ class BEMRet(object):
         >>> bem = bem.clear()
         """
         # MATLAB: [obj.G1i, obj.G2i, obj.L1, obj.L2, obj.Sigma1, obj.Deltai, obj.Sigmai] = deal([])
-        self.G1_lu = None
-        self.G2_lu = None
+        # Release distributed multi-GPU LU buffers when present
+        # (mgpu handles carry a ``_distmat_keepalive`` DistributedMatrix
+        # whose per-GPU tiles must be ``free()``'d explicitly — close()
+        # on the handle alone only releases IPIV/workspace/cusolverMg
+        # objects).
+        for _attr in ('G1_lu', 'G2_lu', 'Delta_lu', 'Sigma_lu'):
+            old = getattr(self, _attr, None)
+            if (isinstance(old, tuple) and len(old) == 3
+                    and old[0] == 'mgpu' and old[1] is not None):
+                handle = old[1]
+                try:
+                    handle.close()
+                except Exception:
+                    pass
+                dm_old = getattr(handle, '_distmat_keepalive', None)
+                if dm_old is not None:
+                    try:
+                        dm_old.free()
+                    except Exception:
+                        pass
+                    try:
+                        handle._distmat_keepalive = None
+                    except Exception:
+                        pass
+            setattr(self, _attr, None)
         self.L1 = None
         self.L2 = None
         self.Sigma1 = None
-        self.Delta_lu = None
-        self.Sigma_lu = None
+        # Force the next init() call to rebuild the matrices.  Without
+        # this, ``init()``'s "skip if same enei" guard would silently
+        # leave the solver in a half-cleared state where L1/Sigma1 are
+        # None but ``self.enei`` is still set, causing later solve()
+        # calls to crash with cryptic ``NoneType`` errors.
+        self.enei = None
         return self
 
     def __call__(self, enei):

@@ -558,7 +558,100 @@ class GreenRetRefined(object):
             'on_gpu': on_gpu,
         }
 
-    def eval(self, k, key):
+    def _build_slice_cache(self, col_start, col_stop):
+        """Build distance arrays for a *column slice* of pos2 only.
+
+        Unlike ``_ensure_cache``, this does NOT cache the result — the
+        whole point of the slice path is to avoid allocating the full
+        (M, N) array.  Returns a dict in the same shape as ``_d_cache``
+        but with column-axis size ``col_stop - col_start``.
+
+        Honours the same backend selection (GPU > numba > numpy) so
+        results are bit-identical to the corresponding column slice of
+        the full-cache path.
+        """
+        from ._numba_ret_kernels import (
+            green_ret_distances_slice, numba_enabled,
+            gpu_enabled, green_ret_distances_slice_gpu,
+        )
+
+        pos1 = self.p1.pos
+        pos2 = self.p2.pos
+        area2 = self.p2.area
+        nvec1 = self.p1.nvec
+        same = self.p1 is self.p2
+
+        pos2_slice = pos2[col_start:col_stop]
+        area2_slice = area2[col_start:col_stop]
+
+        on_gpu = gpu_enabled()
+        if on_gpu:
+            d, inv_d, n_dot_r, x, y, z = green_ret_distances_slice_gpu(
+                pos1, pos2_slice, nvec1,
+                same = same, col_offset = col_start, want_r = True,
+            )
+            inv_d2 = inv_d * inv_d
+        elif numba_enabled():
+            d, inv_d, n_dot_r, x, y, z = green_ret_distances_slice(
+                pos1, pos2_slice, nvec1,
+                same = same, col_offset = col_start, want_r = True,
+            )
+            inv_d2 = inv_d * inv_d
+        else:
+            x = pos1[:, 0:1] - pos2_slice[:, 0]
+            y = pos1[:, 1:2] - pos2_slice[:, 1]
+            z = pos1[:, 2:3] - pos2_slice[:, 2]
+            d = np.sqrt(x**2 + y**2 + z**2)
+            d = np.maximum(d, np.finfo(float).eps)
+            n_dot_r = (nvec1[:, 0:1] * x +
+                       nvec1[:, 1:2] * y +
+                       nvec1[:, 2:3] * z)
+            if same:
+                n1 = pos1.shape[0]
+                ncol = pos2_slice.shape[0]
+                j_lo = max(0, -int(col_start))
+                j_hi = min(ncol, n1 - int(col_start))
+                for j in range(j_lo, j_hi):
+                    i = j + int(col_start)
+                    d[i, j] = np.finfo(float).eps
+                    n_dot_r[i, j] = 0.0
+            inv_d = 1.0 / d
+            inv_d2 = inv_d * inv_d
+
+        return {
+            'x': x, 'y': y, 'z': z, 'd': d,
+            'inv_d': inv_d, 'inv_d2': inv_d2,
+            'area2': area2_slice, 'n_dot_r': n_dot_r,
+            'on_gpu': on_gpu,
+        }
+
+    def _refined_subset(self, col_start, col_stop):
+        """
+        Return (row_sub, col_sub_local, g_sub, f_sub) restricted to
+        refinement entries whose ``col`` lies in [col_start, col_stop).
+
+        ``col_sub_local`` is shifted by -col_start so it indexes into
+        the sliced output matrix directly.
+
+        Returns empty arrays when no refinement entry falls in the
+        slice (e.g. distant column ranges in a dimer).
+        """
+        if len(self.ind) == 0:
+            return (np.array([], dtype = int),
+                    np.array([], dtype = int),
+                    self.g[:0], self.f[:0])
+        mask = (self.col >= col_start) & (self.col < col_stop)
+        if not np.any(mask):
+            return (np.array([], dtype = int),
+                    np.array([], dtype = int),
+                    self.g[:0], self.f[:0])
+        row_sub = self.row[mask]
+        col_sub_local = self.col[mask] - col_start
+        g_sub = self.g[mask]
+        f_sub = self.f[mask]
+        return row_sub, col_sub_local, g_sub, f_sub
+
+    def eval(self, k, key, col_range = None):
         """
         Evaluate Green function with proper refinement.
 
@@ -573,12 +666,35 @@ class GreenRetRefined(object):
             'F' - Surface derivative
             'H1' - F + 2π (inside)
             'H2' - F - 2π (outside)
+        col_range : tuple of (int, int), optional
+            If given, evaluate only columns ``[col_start, col_stop)`` of
+            the Green function (in p2's index space).  Returns shape
+            ``(M, col_stop - col_start)`` instead of ``(M, N)``.
+
+            Memory-efficient: avoids allocating the full (M, N) matrix.
+            This is the path used by ``DistributedMatrix.from_func`` for
+            multi-GPU BEM build, where each GPU computes only its own
+            column tile.
+
+            None (default) evaluates the full matrix and uses the cached
+            distance arrays (backward compatible with all existing
+            callers).
 
         Returns
         -------
-        g : ndarray, shape (n1, n2)
-            Green function matrix
+        g : ndarray
+            Shape ``(n1, n2)`` when ``col_range is None``,
+            ``(n1, col_stop - col_start)`` otherwise.
         """
+        # Slice path: build a non-cached distance tuple for the column
+        # range, then run the same assembly + refinement overlay logic
+        # against that tuple.  Refinement entries are filtered to those
+        # whose col falls in the requested range and rebased so they
+        # index into the sliced output.
+        if col_range is not None:
+            return self._eval_slice(k, key, int(col_range[0]),
+                                    int(col_range[1]))
+
         self._ensure_cache()
         c = self._d_cache
         d = c['d']
@@ -750,6 +866,237 @@ class GreenRetRefined(object):
         else:
             raise ValueError("Unknown key: {}".format(key))
 
+    def _eval_slice(self, k, key, col_start, col_stop):
+        """
+        Evaluate Green function for column range [col_start, col_stop).
+
+        Memory-efficient: only the (M, col_stop - col_start) tile is
+        allocated, not the full (M, N).  Backend selection mirrors
+        :meth:`eval` (GPU > numba > numpy).
+
+        Bit-identical (within IEEE-754 ufunc ordering) to
+        ``self.eval(k, key)[:, col_start:col_stop]``.
+
+        Refinement overlay is restricted to entries whose ``col`` falls
+        in the requested range; the col index is rebased so it indexes
+        into the sliced output directly.
+
+        H1/H2/H1p/H2p self-block diagonal adjustments are applied only
+        to entries inside the slice (rows ``i`` where
+        ``i - col_start`` is a valid local column).
+        """
+        c = self._build_slice_cache(col_start, col_stop)
+        d = c['d']
+        inv_d = c['inv_d']
+        inv_d2 = c['inv_d2']
+        area2 = c['area2']
+        on_gpu = c.get('on_gpu', False)
+        ncol = col_stop - col_start
+
+        # Refinement subset for this column range.
+        row_ref, col_ref_local, g_ref, f_ref = self._refined_subset(
+            col_start, col_stop)
+        has_ref = len(row_ref) > 0
+
+        if on_gpu:
+            return self._eval_slice_gpu(
+                k, key, c, col_start, col_stop,
+                row_ref, col_ref_local, g_ref, f_ref,
+            )
+
+        # CPU / numpy / numba path mirrors eval() but with sliced arrays
+        # and rebased refinement indices.
+        use_numba = self.p1 is not self.p2
+        nb = None
+        if use_numba:
+            from ..simulation import _meshfield_numba as _nb
+            if _nb.numba_enabled():
+                nb = _nb
+
+        if key == 'G':
+            if nb is not None:
+                G = nb.ret_G_pre(inv_d, area2)
+                if has_ref:
+                    ik_powers = np.array([(1j * k)**n for n in range(self.order + 1)])
+                    G_refined = g_ref @ ik_powers
+                    G[row_ref, col_ref_local] = G_refined
+                phase = nb.ret_phase(d, k)
+                nb.apply_phase_2d(G, phase)
+                return G
+
+            G = inv_d * area2[np.newaxis, :] + 0j
+            if has_ref:
+                ik_powers = np.array([(1j * k)**n for n in range(self.order + 1)])
+                G_refined = g_ref @ ik_powers
+                G[row_ref, col_ref_local] = G_refined
+            G = G * np.exp(1j * k * d)
+            return G
+
+        elif key == 'F':
+            if self.deriv == 'cart':
+                x, y, z = c['x'], c['y'], c['z']
+                nvec = self.p1.nvec
+                if nb is not None:
+                    F = nb.ret_F_cart_pre(inv_d, inv_d2, x, y, z, nvec, area2, k)
+                    if has_ref:
+                        ik_powers = np.array([(1j * k)**n for n in range(self.order + 1)])
+                        nvec_ref = nvec[row_ref]
+                        F_refined = np.einsum('ij,ijk,k->i', nvec_ref, f_ref, ik_powers)
+                        F[row_ref, col_ref_local] = F_refined
+                    phase = nb.ret_phase(d, k)
+                    nb.apply_phase_2d(F, phase)
+                    return F
+
+                f_aux = (1j * k - inv_d) * inv_d2
+                F = (nvec[:, 0:1] * (f_aux * x) +
+                     nvec[:, 1:2] * (f_aux * y) +
+                     nvec[:, 2:3] * (f_aux * z)) * area2[np.newaxis, :]
+                if has_ref:
+                    ik_powers = np.array([(1j * k)**n for n in range(self.order + 1)])
+                    nvec_ref = nvec[row_ref]
+                    F_refined = np.einsum('ij,ijk,k->i', nvec_ref, f_ref, ik_powers)
+                    F[row_ref, col_ref_local] = F_refined
+                F = F * np.exp(1j * k * d)
+                return F
+            else:
+                n_dot_r = c['n_dot_r']
+                if nb is not None:
+                    F = nb.ret_F_norm_pre(inv_d, inv_d2, n_dot_r, area2, k)
+                    if has_ref:
+                        ik_powers = np.array([(1j * k)**n for n in range(self.order + 1)])
+                        F_refined = f_ref @ ik_powers
+                        F[row_ref, col_ref_local] = F_refined
+                    phase = nb.ret_phase(d, k)
+                    nb.apply_phase_2d(F, phase)
+                    return F
+
+                F = n_dot_r * (1j * k - inv_d) * inv_d2 * area2[np.newaxis, :]
+                if has_ref:
+                    ik_powers = np.array([(1j * k)**n for n in range(self.order + 1)])
+                    F_refined = f_ref @ ik_powers
+                    F[row_ref, col_ref_local] = F_refined
+                F = F * np.exp(1j * k * d)
+                return F
+
+        elif key == 'H1':
+            H1 = self._eval_slice(k, 'F', col_start, col_stop)
+            if self.p1 is self.p2:
+                self._add_slice_diagonal(H1, col_start, col_stop, +2.0 * np.pi)
+            return H1
+
+        elif key == 'H2':
+            H2 = self._eval_slice(k, 'F', col_start, col_stop)
+            if self.p1 is self.p2:
+                self._add_slice_diagonal(H2, col_start, col_stop, -2.0 * np.pi)
+            return H2
+
+        elif key == 'Gp':
+            x, y, z = c['x'], c['y'], c['z']
+            if nb is not None:
+                Gp = nb.ret_Gp_pre(inv_d, inv_d2, x, y, z, area2, k)
+                if has_ref and self.deriv == 'cart':
+                    ik_powers = np.array([(1j * k)**n for n in range(self.order + 1)])
+                    Gp_refined = np.einsum('ijk,k->ij', f_ref, ik_powers)
+                    Gp[row_ref, 0, col_ref_local] = Gp_refined[:, 0]
+                    Gp[row_ref, 1, col_ref_local] = Gp_refined[:, 1]
+                    Gp[row_ref, 2, col_ref_local] = Gp_refined[:, 2]
+                phase = nb.ret_phase(d, k)
+                nb.apply_phase_3d_axis02(Gp, phase)
+                return Gp
+
+            phase = np.exp(1j * k * d)
+            f_aux = (1j * k - inv_d) * inv_d2
+            Gp_x = f_aux * x * area2[np.newaxis, :]
+            Gp_y = f_aux * y * area2[np.newaxis, :]
+            Gp_z = f_aux * z * area2[np.newaxis, :]
+
+            if has_ref and self.deriv == 'cart':
+                ik_powers = np.array([(1j * k)**n for n in range(self.order + 1)])
+                Gp_refined = np.einsum('ijk,k->ij', f_ref, ik_powers)
+                Gp_x[row_ref, col_ref_local] = Gp_refined[:, 0]
+                Gp_y[row_ref, col_ref_local] = Gp_refined[:, 1]
+                Gp_z[row_ref, col_ref_local] = Gp_refined[:, 2]
+
+            Gp_x *= phase; Gp_y *= phase; Gp_z *= phase
+            Gp = np.stack([Gp_x, Gp_y, Gp_z], axis = 1)  # (n1, 3, ncol)
+            return Gp
+
+        elif key == 'H1p':
+            Gp = self._eval_slice(k, 'Gp', col_start, col_stop)
+            if self.p1 is self.p2:
+                H1p = Gp.copy()
+                self._add_slice_diagonal_3d(H1p, col_start, col_stop,
+                                            +2.0 * np.pi)
+                return H1p
+            return Gp
+
+        elif key == 'H2p':
+            Gp = self._eval_slice(k, 'Gp', col_start, col_stop)
+            if self.p1 is self.p2:
+                H2p = Gp.copy()
+                self._add_slice_diagonal_3d(H2p, col_start, col_stop,
+                                            -2.0 * np.pi)
+                return H2p
+            return Gp
+
+        else:
+            raise ValueError("Unknown key: {}".format(key))
+
+    def _add_slice_diagonal(self, mat, col_start, col_stop, scalar):
+        """Add ``scalar`` to mat[i, j] where i == j + col_start.
+
+        Used by H1/H2 self-block diagonal correction in the slice path.
+        Operates in place.  ``mat`` is a 2-D numpy or cupy ndarray.
+        """
+        n1 = self.p1.n
+        ncol = col_stop - col_start
+        j_lo = max(0, -int(col_start))
+        j_hi = min(ncol, n1 - int(col_start))
+        if j_hi <= j_lo:
+            return
+        try:
+            import cupy as cp  # type: ignore
+            if isinstance(mat, cp.ndarray):
+                j_idx = cp.arange(j_lo, j_hi)
+                i_idx = j_idx + int(col_start)
+                mat[i_idx, j_idx] = mat[i_idx, j_idx] + scalar
+                return
+        except Exception:
+            pass
+        j_idx = np.arange(j_lo, j_hi)
+        i_idx = j_idx + int(col_start)
+        mat[i_idx, j_idx] = mat[i_idx, j_idx] + scalar
+
+    def _add_slice_diagonal_3d(self, mat, col_start, col_stop, scalar):
+        """Add ``scalar * nvec[i]`` to mat[i, :, j] where i == j + col_start.
+
+        Used by H1p/H2p self-block diagonal correction in the slice path.
+        Operates in place.  ``mat`` is a 3-D (n1, 3, ncol) numpy or cupy
+        ndarray.
+        """
+        n1 = self.p1.n
+        ncol = col_stop - col_start
+        j_lo = max(0, -int(col_start))
+        j_hi = min(ncol, n1 - int(col_start))
+        if j_hi <= j_lo:
+            return
+        try:
+            import cupy as cp  # type: ignore
+            if isinstance(mat, cp.ndarray):
+                j_idx = cp.arange(j_lo, j_hi)
+                i_idx = j_idx + int(col_start)
+                nvec_g = cp.asarray(self.p1.nvec[(j_lo + col_start):(j_hi + col_start)])
+                mat[i_idx, :, j_idx] = mat[i_idx, :, j_idx] + scalar * nvec_g
+                return
+        except Exception:
+            pass
+        j_idx = np.arange(j_lo, j_hi)
+        i_idx = j_idx + int(col_start)
+        # nvec[i] for each diagonal entry, shape (n_diag, 3)
+        nvec_diag = self.p1.nvec[i_idx]
+        # mat[i_idx, :, j_idx] selects shape (n_diag, 3) (fancy indexing)
+        mat[i_idx, :, j_idx] = mat[i_idx, :, j_idx] + scalar * nvec_diag
+
     def _eval_gpu(self, k, key, c):
         """GPU evaluation path for G/F/H1/H2/Gp/H1p/H2p.
 
@@ -884,6 +1231,131 @@ class GreenRetRefined(object):
                 nvec = self.p1.nvec
                 idx = np.arange(len(nvec))
                 H2p[idx, :, idx] -= 2.0 * np.pi * nvec.T
+                return H2p
+            return Gp
+
+        else:
+            raise ValueError("Unknown key: {}".format(key))
+
+    def _eval_slice_gpu(self, k, key, c, col_start, col_stop,
+                         row_ref, col_ref_local, g_ref, f_ref):
+        """GPU evaluation for a column slice.
+
+        Mirrors :meth:`_eval_gpu` but the input ``c`` is a non-cached
+        slice cache from :meth:`_build_slice_cache` (shape (M, ncol))
+        and the refinement subset (``row_ref``, ``col_ref_local``,
+        ``g_ref``, ``f_ref``) has already been filtered to entries
+        whose col falls in [col_start, col_stop) with col index rebased
+        by -col_start.
+
+        H1/H2/H1p/H2p self-block diagonal correction is applied only
+        to slice-local diagonal positions.
+        """
+        import cupy as cp
+        from ._numba_ret_kernels import (
+            ret_G_pre_gpu, ret_F_norm_pre_gpu, ret_F_cart_pre_gpu,
+            ret_Gp_pre_gpu, ret_phase_gpu,
+            apply_phase_2d_gpu, apply_phase_3d_axis02_gpu,
+            to_host, gpu_native_enabled,
+        )
+
+        native = gpu_native_enabled()
+        _ret = (lambda x: x) if native else to_host
+
+        d = c['d']
+        inv_d = c['inv_d']
+        inv_d2 = c['inv_d2']
+        area2 = c['area2']
+        has_ref = len(row_ref) > 0
+
+        # Upload nvec once.
+        nvec_gpu = cp.asarray(self.p1.nvec)
+        # Upload refinement subset (small) on demand.
+        if has_ref:
+            g_ref_gpu = cp.asarray(g_ref) if g_ref.size > 0 else None
+            f_ref_gpu = cp.asarray(f_ref) if f_ref.size > 0 else None
+            row_ref_gpu = cp.asarray(row_ref)
+            col_ref_gpu = cp.asarray(col_ref_local)
+
+        if key == 'G':
+            G = ret_G_pre_gpu(inv_d, area2)
+            if has_ref:
+                ik_powers = cp.asarray(
+                    np.array([(1j * k)**n for n in range(self.order + 1)]))
+                G_refined = g_ref_gpu @ ik_powers
+                G[row_ref_gpu, col_ref_gpu] = G_refined
+            phase = ret_phase_gpu(d, k)
+            apply_phase_2d_gpu(G, phase)
+            return _ret(G)
+
+        elif key == 'F':
+            if self.deriv == 'cart':
+                x, y, z = c['x'], c['y'], c['z']
+                F = ret_F_cart_pre_gpu(inv_d, inv_d2, x, y, z,
+                                       nvec_gpu, area2, k)
+                if has_ref:
+                    ik_powers = cp.asarray(
+                        np.array([(1j * k)**n for n in range(self.order + 1)]))
+                    nvec_ref = nvec_gpu[row_ref_gpu]
+                    F_refined = cp.einsum(
+                        'ij,ijk,k->i', nvec_ref, f_ref_gpu, ik_powers)
+                    F[row_ref_gpu, col_ref_gpu] = F_refined
+                phase = ret_phase_gpu(d, k)
+                apply_phase_2d_gpu(F, phase)
+                return _ret(F)
+            else:
+                n_dot_r = c['n_dot_r']
+                F = ret_F_norm_pre_gpu(inv_d, inv_d2, n_dot_r, area2, k)
+                if has_ref:
+                    ik_powers = cp.asarray(
+                        np.array([(1j * k)**n for n in range(self.order + 1)]))
+                    F_refined = f_ref_gpu @ ik_powers
+                    F[row_ref_gpu, col_ref_gpu] = F_refined
+                phase = ret_phase_gpu(d, k)
+                apply_phase_2d_gpu(F, phase)
+                return _ret(F)
+
+        elif key == 'H1':
+            H1 = self._eval_slice(k, 'F', col_start, col_stop)
+            if self.p1 is self.p2:
+                self._add_slice_diagonal(H1, col_start, col_stop, +2.0 * np.pi)
+            return H1
+
+        elif key == 'H2':
+            H2 = self._eval_slice(k, 'F', col_start, col_stop)
+            if self.p1 is self.p2:
+                self._add_slice_diagonal(H2, col_start, col_stop, -2.0 * np.pi)
+            return H2
+
+        elif key == 'Gp':
+            x, y, z = c['x'], c['y'], c['z']
+            Gp = ret_Gp_pre_gpu(inv_d, inv_d2, x, y, z, area2, k)
+            if has_ref and self.deriv == 'cart':
+                ik_powers = cp.asarray(
+                    np.array([(1j * k)**n for n in range(self.order + 1)]))
+                Gp_refined = cp.einsum('ijk,k->ij', f_ref_gpu, ik_powers)
+                Gp[row_ref_gpu, 0, col_ref_gpu] = Gp_refined[:, 0]
+                Gp[row_ref_gpu, 1, col_ref_gpu] = Gp_refined[:, 1]
+                Gp[row_ref_gpu, 2, col_ref_gpu] = Gp_refined[:, 2]
+            phase = ret_phase_gpu(d, k)
+            apply_phase_3d_axis02_gpu(Gp, phase)
+            return _ret(Gp)
+
+        elif key == 'H1p':
+            Gp = self._eval_slice(k, 'Gp', col_start, col_stop)
+            if self.p1 is self.p2:
+                H1p = Gp.copy() if hasattr(Gp, 'copy') else Gp
+                self._add_slice_diagonal_3d(H1p, col_start, col_stop,
+                                            +2.0 * np.pi)
+                return H1p
+            return Gp
+
+        elif key == 'H2p':
+            Gp = self._eval_slice(k, 'Gp', col_start, col_stop)
+            if self.p1 is self.p2:
+                H2p = Gp.copy() if hasattr(Gp, 'copy') else Gp
+                self._add_slice_diagonal_3d(H2p, col_start, col_stop,
+                                            -2.0 * np.pi)
                 return H2p
             return Gp
 
