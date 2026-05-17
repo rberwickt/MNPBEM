@@ -211,6 +211,10 @@ class BEMStat(object):
         self._core_idx = None
         self._schur_reduce_rhs = None
         self._schur_recover = None
+        # v1.8 (VRAM-Schur): keepalive dict for the distributed Schur
+        # host slices (M_ss LU + M_sc + M_cs + D_inv_C).  None on the
+        # legacy host path; set by ``_init_distributed_schur``.
+        self._schur_dist_keepalive = None
 
         # Initialize properties
         self.enei = None
@@ -252,17 +256,29 @@ class BEMStat(object):
             # _DISTRIBUTED=1 and n_gpus>=2, route the BEM matrix build +
             # LU through DistributedMatrix so the host never holds the
             # full ``-(Lambda + F)`` matrix simultaneously with the
-            # cuSolverMg LU factor.  Schur reduction is incompatible with
-            # the column-split build (the schur eliminator needs the full
-            # host matrix), so we keep the legacy path for that.
-            if _vram_share_active() and not self._schur_opt:
-                try:
-                    return self._init_distributed_assemble(enei)
-                except Exception as e:  # pragma: no cover - safety
-                    import warnings
-                    warnings.warn(
-                        '[warn] BEMStat distributed assembly failed ({}); '
-                        'falling back to host build'.format(e))
+            # cuSolverMg LU factor.  v1.8 (VRAM-Schur) extends this to
+            # the Schur-reduced path: when ``self._schur_opt`` is also
+            # set and an EpsNonlocal cover layer is detected, the
+            # reduced (n_core, n_core) BEM matrix is assembled directly
+            # distributed via ``_init_distributed_schur``.
+            if _vram_share_active():
+                if self._schur_opt:
+                    try:
+                        return self._init_distributed_schur(enei)
+                    except Exception as e:  # pragma: no cover - safety
+                        import warnings
+                        warnings.warn(
+                            '[warn] BEMStat distributed Schur assembly '
+                            'failed ({}); falling back to host build'
+                            .format(e))
+                else:
+                    try:
+                        return self._init_distributed_assemble(enei)
+                    except Exception as e:  # pragma: no cover - safety
+                        import warnings
+                        warnings.warn(
+                            '[warn] BEMStat distributed assembly failed ({}); '
+                            'falling back to host build'.format(e))
             # v1.7.2 MATLAB-parity: free cupy pools before allocating the
             # new wavelength's BEM matrices.  The previous wavelength's
             # mat_lu (a ~N^2 complex device buffer when lu_factor_dispatch
@@ -527,10 +543,173 @@ class BEMStat(object):
 
         # Schur path is incompatible with the column-split build (it
         # needs the full host matrix to eliminate shell faces).  When
-        # _vram_share_active is True we never enter this branch from
-        # _init_matrices in the first place, but reset the flag here
-        # for safety so downstream solve takes the standard path.
+        # _vram_share_active is True with schur on, we route through
+        # ``_init_distributed_schur`` instead of this method.  Reset
+        # the flag here for safety so downstream solve takes the
+        # standard path on the non-Schur distributed branch.
         self._schur_active = False
+
+        # Final sync + pool compaction across all participating devices.
+        try:
+            for d in device_ids:
+                cp.cuda.runtime.setDevice(d)
+                cp.cuda.runtime.deviceSynchronize()
+                cp.get_default_memory_pool().free_all_blocks()
+            cp.get_default_pinned_memory_pool().free_all_blocks()
+        except Exception:
+            pass
+
+        self.enei = enei
+        return self
+
+    def _init_distributed_schur(self, enei):
+        """v1.8 VRAM-Schur: distributed BEM matrix build + Schur reduction.
+
+        Combines the column-distributed build path with the Schur-complement
+        elimination of EpsNonlocal cover-layer shell faces.  Both the full
+        BEM matrix ``M = -(diag(Lambda) + F)`` and the reduced matrix
+        ``M_eff = M_cc - M_cs @ inv(M_ss) @ M_sc`` are assembled directly
+        as ``DistributedMatrix`` tiles across N GPUs; the dominant LU
+        factor operates on ``M_eff`` (size ``n_core, n_core``).
+
+        Pipeline
+        --------
+        1. Detect shell / core partition (skip distributed path if no
+           cover layer is present and fall back to the non-Schur
+           distributed build).
+        2. Build the small host slices ``M_ss / M_sc / M_cs`` via the
+           same ``M_eval`` callback used by the distributed assembler
+           (slab reads of ``F_host[:, c0:c1] + Lambda diag - negation``).
+        3. ``schur_eliminate_distributed`` runs ``D_inv_C = lu_solve(M_ss,
+           M_sc)`` on host (single dense LU, ~``(N/2, N/2)``), then
+           builds the reduced matrix tile-by-tile via
+           ``DistributedMatrix.from_func`` (each tile = M_cc column slice
+           minus ``M_cs @ D_inv_C[:, c0:c1]``, computed on the owning GPU).
+        4. cuSolverMg getrf factors the reduced distributed matrix in
+           place.  ``self.mat_lu`` becomes ``('mgpu', handle, None)``
+           with ``handle._distmat_keepalive`` holding the per-GPU tiles.
+
+        Bit-identity contract
+        ---------------------
+        The reduce/recover callables are bit-identical to
+        ``schur_eliminate`` on a host build (same lu_solve calls on the
+        same M_ss factor).  The reduced LU itself differs from a CPU LU
+        only by floating-point rounding bounded by ``n_core *
+        eps_machine`` — well below the BEM physics tolerance.
+        """
+
+        import gc as _gc
+        from ..utils.distributed_matrix import DistributedMatrix
+        from .schur_helpers import (
+                schur_eliminate_distributed,
+                detect_shell_core_partition,
+        )
+        cp = _cp_v172
+
+        partition = detect_shell_core_partition(self.p)
+        if partition is None:
+            # No cover layer — defer to the standard distributed build
+            # which factors the full (N, N) matrix.
+            self._schur_active = False
+            return self._init_distributed_assemble(enei)
+
+        shell_idx, core_idx = partition
+
+        dist_kw = _vram_share_distributed_kwargs()
+        n_gpus = int(dist_kw['n_gpus'])
+        device_ids = dist_kw['device_ids']
+        block_size = int(dist_kw['block_size'])
+        if device_ids is None:
+            device_ids = list(range(n_gpus))
+        assert len(device_ids) == n_gpus, \
+            '[error] MNPBEM_VRAM_SHARE_DEVICE_IDS length must equal MNPBEM_VRAM_SHARE_GPUS'
+
+        # ---- Per-wavelength cleanup: close stale LU + free old tiles ----
+        old = getattr(self, 'mat_lu', None)
+        if (isinstance(old, tuple) and len(old) == 3
+                and old[0] == 'mgpu' and old[1] is not None):
+            handle = old[1]
+            try:
+                handle.close()
+            except Exception:
+                pass
+            dm_old = getattr(handle, '_distmat_keepalive', None)
+            if dm_old is not None:
+                try:
+                    dm_old.free()
+                except Exception:
+                    pass
+                try:
+                    handle._distmat_keepalive = None
+                except Exception:
+                    pass
+        self.mat_lu = None
+        self._schur_reduce_rhs = None
+        self._schur_recover = None
+        self._schur_dist_keepalive = None
+        _gc.collect()
+        try:
+            _pool_limit_gb = float(
+                os.environ.get('MNPBEM_GPU_POOL_LIMIT_GB', '0'))
+        except (TypeError, ValueError):
+            _pool_limit_gb = 0.0
+        try:
+            mempool = cp.get_default_memory_pool()
+            pinned = cp.get_default_pinned_memory_pool()
+            if _pool_limit_gb > 0:
+                mempool.set_limit(size=int(_pool_limit_gb * (1024 ** 3)))
+            for d in device_ids:
+                cp.cuda.runtime.setDevice(d)
+                cp.cuda.runtime.deviceSynchronize()
+                mempool.free_all_blocks()
+            pinned.free_all_blocks()
+        except Exception:
+            pass
+
+        # ---- Lambda evaluation -----------------------------------------
+        eps1 = self.p.eps1(enei)
+        eps2 = self.p.eps2(enei)
+        lambda_diag = (2 * np.pi * (eps1 + eps2) / (eps1 - eps2)).astype(
+            np.complex128)
+
+        # ---- M_eval callback (full column slice, includes shell+core
+        # rows) -- shared with the distributed eval_func.
+        N = int(self.F.shape[0])
+        F_host = np.asarray(self.F)
+
+        def _M_eval(c0: int, c1: int) -> np.ndarray:
+            block = F_host[:, c0:c1].astype(np.complex128, copy = True)
+            ncol = c1 - c0
+            for k in range(ncol):
+                j = c0 + k
+                block[j, k] += lambda_diag[j]
+            # Negate to form M = -(diag(Lambda) + F).
+            return -block
+
+        # ---- Build the reduced distributed matrix ----------------------
+        M_eff_dm, reduce_rhs, recover, keepalive = schur_eliminate_distributed(
+                M_eval = _M_eval,
+                N_full = N,
+                shell_indices = shell_idx,
+                core_indices = core_idx,
+                n_gpus = n_gpus,
+                device_ids = device_ids,
+                block_size = block_size)
+
+        # ---- Factor reduced matrix in place ----------------------------
+        M_mglu = M_eff_dm.lu_factor(backend = 'cusolvermg')
+        M_mglu._distmat_keepalive = M_eff_dm  # type: ignore[attr-defined]
+        self.mat_lu = ('mgpu', M_mglu, None)
+
+        # Wire up Schur callables so _schur_solve picks them up.
+        self._shell_idx = np.asarray(shell_idx)
+        self._core_idx = np.asarray(core_idx)
+        self._schur_reduce_rhs = reduce_rhs
+        self._schur_recover = recover
+        self._schur_active = True
+        # Stash the keepalive on the instance so the host slices the
+        # closures capture do not get GC'd while we still need them.
+        self._schur_dist_keepalive = keepalive
 
         # Final sync + pool compaction across all participating devices.
         try:
@@ -829,6 +1008,13 @@ class BEMStat(object):
         self._schur_active = False
         self._schur_reduce_rhs = None
         self._schur_recover = None
+        # v1.8 (VRAM-Schur): drop the distributed-Schur host keepalive
+        # (M_ss LU + M_sc + M_cs + D_inv_C).  The closures captured these
+        # via the dict so the explicit reset ensures the references are
+        # gone before the next solve allocates.  Safe no-op on the
+        # non-distributed path (attribute never set).
+        if hasattr(self, '_schur_dist_keepalive'):
+            self._schur_dist_keepalive = None
         # v1.7.2: an explicit clear() is the user's signal that they want
         # the BEM cache gone — free the cupy pool so memory returns to
         # the device immediately (analogous to MATLAB's wavelength-end

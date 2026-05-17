@@ -341,3 +341,38 @@ def schur_iter_memory_estimate(
         'g_ss_dense_bytes': g_ss_dense_bytes,
         'krylov_reduction_ratio': core_krylov_bytes / full_krylov_bytes if full_krylov_bytes else 0.0,
     }
+
+
+# ---------------------------------------------------------------------------
+# Distributed Schur preconditioner adapter (v1.8 VRAM-Schur)
+# ---------------------------------------------------------------------------
+
+def make_distributed_schur_preconditioner(
+        mat_lu: Any) -> Optional[Callable[[np.ndarray], np.ndarray]]:
+
+    # Wrap a multi-GPU ``('mgpu', MultiGPULU_handle, None)`` LU
+    # package in a callable suitable for use as GMRES preconditioner on
+    # the *reduced* Schur operator.  Returns ``None`` when ``mat_lu`` is
+    # not the distributed-LU shape (so callers can fall back without
+    # raising).
+    #
+    # The reduced LU has shape ``(n_core, n_core)`` and lives on N GPUs
+    # via cuSolverMg block-cyclic tiles; ``lu_solve_dispatch`` already
+    # routes the ``'mgpu'`` tag through ``MultiGPULU.solve_chunked`` so
+    # the closure here is a thin adapter that hands the RHS to that
+    # helper and returns a host ndarray.
+    #
+    # Used by ``BEMStatIter._init_distributed_schur`` to wire the reduced
+    # LU into the GMRES `M` argument; ``BEMRetIter`` (out of scope for
+    # v1.8 — bem_ret_iter.py is unchanged) could use the same adapter
+    # if the retarded distributed-Schur path is added later.
+    if not (isinstance(mat_lu, tuple) and len(mat_lu) == 3
+            and mat_lu[0] == 'mgpu' and mat_lu[1] is not None):
+        return None
+
+    from ..utils.gpu import lu_solve_dispatch as _lu_solve_dispatch
+
+    def _precond(x: np.ndarray) -> np.ndarray:
+        return _lu_solve_dispatch(mat_lu, x)
+
+    return _precond

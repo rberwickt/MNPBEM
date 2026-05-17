@@ -93,6 +93,18 @@ def _vram_share_env_config_stat() -> Tuple[int, str, Optional[List[int]]]:
     return n_gpus, backend, device_ids
 
 
+def _vram_share_distributed_kwargs_stat() -> Dict[str, Any]:
+    """Return ``{n_gpus, device_ids, block_size}`` for DistributedMatrix.
+
+    v1.8 (VRAM-Schur): mirror of ``bem_stat._vram_share_distributed_kwargs``
+    used by the BEMStatIter distributed-Schur path.  Honours
+    ``MNPBEM_VRAM_SHARE_GPUS`` / ``MNPBEM_VRAM_SHARE_DEVICE_IDS`` and the
+    cuSolverMg-recommended 256-column block size.
+    """
+    n_gpus, _backend, device_ids = _vram_share_env_config_stat()
+    return {'n_gpus': n_gpus, 'device_ids': device_ids, 'block_size': 256}
+
+
 def _compgreen_stat_eval_block(green: Any,
         key: str,
         c0: int,
@@ -346,6 +358,12 @@ class BEMStatIter(BEMIter):
         self._shell_face_idx = None
         self._core_face_idx = None
         self._schur_op = None
+        # v1.8 (VRAM-Schur): host-side keepalive for the distributed
+        # Schur reduction (M_ss LU + M_sc + M_cs + D_inv_C).  None on
+        # the legacy single-GPU / CPU paths.
+        self._schur_reduce_keepalive = None
+        self._schur_dist_reduce_rhs = None
+        self._schur_dist_recover = None
 
         # H-matrix (v1.3.0): opt-in ACA acceleration of F. The matvec used
         # by GMRES then uses HMatrix @ x rather than dense matmul.
@@ -510,6 +528,22 @@ class BEMStatIter(BEMIter):
         if self.enei is not None and self.enei == enei:
             return self
 
+        # v1.8 (VRAM-Schur): when both distributed-build AND Schur are
+        # active we take a dedicated path that assembles the reduced
+        # (n_core, n_core) BEM matrix directly distributed and uses it
+        # as the GMRES preconditioner.  The host-side full LU build
+        # below is bypassed; the SchurIterOperator is wired up later in
+        # the same method so its presence still triggers the reduced
+        # GMRES on solve().
+        if (_vram_share_active_stat() and self._schur_opt
+                and not self._hmatrix):
+            try:
+                return self._init_distributed_schur(enei)
+            except Exception as _exc:
+                print('[info] BEMStatIter._init_distributed_schur failed '
+                        '({}), falling back to host build.'.format(_exc),
+                        flush = True)
+
         # v1.7.2 wavelength-entry GPU cleanup: drain any stale residents from
         # the previous wavelength BEFORE we re-factor (-Lambda - F) so the
         # new dense LU sees the maximum amount of free device memory.
@@ -627,6 +661,193 @@ class BEMStatIter(BEMIter):
 
         return self
 
+    def _init_distributed_schur(self,
+            enei: float) -> 'BEMStatIter':
+        """v1.8 VRAM-Schur: distributed Schur reduction for the iter path.
+
+        Builds the reduced ``M_eff = M_cc - M_cs @ inv(M_ss) @ M_sc``
+        directly distributed across N GPUs via
+        ``schur_eliminate_distributed`` (see ``schur_helpers.py``).  The
+        reduced LU acts as the GMRES preconditioner; the
+        :class:`SchurIterOperator` wraps ``_afun`` as before so the
+        GMRES matvec stays on the full (-Lambda - F) operator (this
+        keeps Schur reduction's algebraic equivalence intact while
+        letting the preconditioner exploit the reduced-block structure).
+
+        The full preconditioner LU (size ``(N, N)``) that the legacy
+        path stores in ``self._mat_lu`` is bypassed entirely — only the
+        reduced ``(n_core, n_core)`` LU is allocated, partitioned across
+        the N participating GPUs.
+
+        Bit-identity: the algebraic GMRES residual is unchanged (same
+        matvec); only the preconditioner approximation changes, which
+        affects iteration count not the final solution to ``rtol``.
+        """
+
+        # Reuse cached LU when the wavelength has not changed.  Mirrors
+        # the guard at the top of ``_init_matrices``.
+        if (self.enei is not None and self.enei == enei
+                and self._schur_active and self._mat_lu is not None):
+            return self
+
+        import gc as _gc
+        from .schur_iter_helpers import (
+                SchurIterOperator,
+                detect_iter_partition,
+        )
+        from .schur_helpers import schur_eliminate_distributed
+
+        partition = detect_iter_partition(self.p)
+        if partition is None:
+            # No cover layer — defer to the standard init path.  Temporarily
+            # disable ``_schur_opt`` so the top-of-``_init_matrices`` guard
+            # does not recurse into this method.  The non-Schur branch
+            # below still allows ``schur=True`` callers to silently fall
+            # back when no EpsNonlocal layer is present (matches the
+            # behaviour of the host-side ``_init_matrices`` Schur block).
+            self._schur_active = False
+            self._schur_op = None
+            self.enei = None
+            saved_schur_opt = self._schur_opt
+            self._schur_opt = False
+            try:
+                return self._init_matrices(enei)
+            finally:
+                self._schur_opt = saved_schur_opt
+
+        shell_idx, core_idx = partition
+        dist_kw = _vram_share_distributed_kwargs_stat()
+        n_gpus = int(dist_kw['n_gpus'])
+        device_ids = dist_kw['device_ids']
+        block_size = int(dist_kw['block_size'])
+        if device_ids is None:
+            device_ids = list(range(n_gpus))
+
+        # ---- Per-wavelength cleanup: close stale LU + free old tiles ----
+        old = self._mat_lu
+        if (isinstance(old, tuple) and len(old) == 3
+                and old[0] == 'mgpu' and old[1] is not None):
+            handle = old[1]
+            try:
+                handle.close()
+            except Exception:
+                pass
+            dm_old = getattr(handle, '_distmat_keepalive', None)
+            if dm_old is not None:
+                try:
+                    dm_old.free()
+                except Exception:
+                    pass
+                try:
+                    handle._distmat_keepalive = None
+                except Exception:
+                    pass
+        self._mat_lu = None
+        self._schur_reduce_keepalive = None
+        _gc.collect()
+        _gpu_pool_cleanup_stat(apply_limit = True)
+        if _CUPY_OK_STAT:
+            _cp_stat.get_default_memory_pool().free_all_blocks()
+
+        self.enei = enei
+
+        # ---- Dielectric / Lambda ---------------------------------------
+        eps1 = self.p.eps1(enei)
+        eps2 = self.p.eps2(enei)
+        self._lambda = 2 * np.pi * (eps1 + eps2) / (eps1 - eps2)
+
+        # ---- M_eval (full column slice) -------------------------------
+        N = int(self.F.shape[0])
+        F_host = np.asarray(self.F)
+        # Promote lambda to (N,) array for diagonal addition.
+        if (np.isscalar(self._lambda)
+                or (isinstance(self._lambda, np.ndarray)
+                        and self._lambda.ndim == 0)):
+            lambda_diag = np.full(
+                    N, complex(self._lambda), dtype = np.complex128)
+        else:
+            lambda_diag = np.asarray(self._lambda, dtype = np.complex128)
+
+        def _M_eval(c0: int, c1: int) -> np.ndarray:
+            # Build the legacy preconditioner form -(diag(Lambda) + F) so
+            # the reduced LU mirrors what _mfun would solve on the full
+            # path.
+            block = F_host[:, c0:c1].astype(np.complex128, copy = True)
+            ncol = c1 - c0
+            for k in range(ncol):
+                j = c0 + k
+                block[j, k] += lambda_diag[j]
+            return -block
+
+        # ---- Build reduced distributed matrix + reduce/recover --------
+        M_eff_dm, reduce_rhs, recover, keepalive = schur_eliminate_distributed(
+                M_eval = _M_eval,
+                N_full = N,
+                shell_indices = shell_idx,
+                core_indices = core_idx,
+                n_gpus = n_gpus,
+                device_ids = device_ids,
+                block_size = block_size)
+
+        # ---- Factor reduced matrix in place ---------------------------
+        M_mglu = M_eff_dm.lu_factor(backend = 'cusolvermg')
+        M_mglu._distmat_keepalive = M_eff_dm  # type: ignore[attr-defined]
+        self._mat_lu = ('mgpu', M_mglu, None)
+        self._schur_reduce_keepalive = keepalive
+
+        # ---- SchurIterOperator (wraps _afun = full M matvec) -----------
+        # The GMRES iteration runs on the reduced operator M_eff.  Each
+        # matvec costs 2 full-mesh M @ v matvecs + 1 small M_ss^-1 apply.
+        nfaces = self.p.n if hasattr(self.p, 'n') else self.p.nfaces
+        self._shell_face_idx = shell_idx
+        self._core_face_idx = core_idx
+        # Reuse the cached host M_ss LU from ``schur_eliminate_distributed``
+        # to back the SchurIterOperator's A_ss^{-1} (callable mode).  This
+        # makes the operator's reduce_rhs / recover_full numerically
+        # identical to the closures we just stored, and avoids re-probing
+        # the shell block in lu_dense mode (which would otherwise burn
+        # n_shell extra full matvecs per wavelength).
+        lu_ss, piv_ss = keepalive['M_ss_lu']
+
+        def _user_g_ss_solver(rhs):
+            from scipy.linalg import lu_solve as _lu_solve_host
+            if rhs.ndim == 1:
+                return _lu_solve_host(
+                        (lu_ss, piv_ss), rhs, check_finite = False)
+            return _lu_solve_host(
+                    (lu_ss, piv_ss),
+                    rhs.reshape(rhs.shape[0], -1),
+                    check_finite = False).reshape(rhs.shape)
+
+        self._schur_op = SchurIterOperator(
+                self._afun,
+                shell_idx,
+                core_idx,
+                nfaces = nfaces,
+                components = 1,
+                dtype = complex,
+                g_ss_solver = 'callable',
+                user_g_ss_solver = _user_g_ss_solver,
+                inner_tol = self._schur_inner_tol,
+                inner_maxit = self._schur_inner_maxit)
+        # Also store the host reduce/recover for diagnostics / parity checks.
+        self._schur_dist_reduce_rhs = reduce_rhs
+        self._schur_dist_recover = recover
+        self._schur_active = True
+
+        # Final sync + pool compaction across all participating devices.
+        if _CUPY_OK_STAT:
+            try:
+                for d in device_ids:
+                    _cp_stat.cuda.runtime.setDevice(d)
+                    _cp_stat.cuda.runtime.deviceSynchronize()
+                    _cp_stat.get_default_memory_pool().free_all_blocks()
+                _cp_stat.get_default_pinned_memory_pool().free_all_blocks()
+            except Exception:
+                pass
+
+        return self
+
     def _afun(self,
             vec: np.ndarray) -> np.ndarray:
 
@@ -679,13 +900,19 @@ class BEMStatIter(BEMIter):
 
         if self._schur_active:
             # Schur path: GMRES is run on the reduced (core-only) operator.
-            # The preconditioner is bypassed because _mfun was built for the
-            # full (N, N) (-Lambda - F) factor and would need re-factoring on
-            # the core block. The reduced system is well-conditioned for
-            # cover-layer geometries so this is acceptable for v1.5.0.
+            # v1.8 (VRAM-Schur): when ``self._mat_lu`` carries a reduced LU
+            # (the ('mgpu', ...) tag set by ``_init_distributed_schur``)
+            # we hand it to GMRES as the preconditioner so the
+            # iteration count benefits from the distributed multi-GPU
+            # LU.  Otherwise (v1.5.0 legacy path) the preconditioner is
+            # bypassed because ``_mfun`` was built for the full (N, N)
+            # (-Lambda - F) factor and would need re-factoring on the
+            # core block.
+            from .schur_iter_helpers import make_distributed_schur_preconditioner
             op = self._schur_op
             b_eff = op.reduce_rhs(b)
-            x_core, _ = self._iter_solve(None, b_eff, op._matvec, None)
+            fm_schur = make_distributed_schur_preconditioner(self._mat_lu)
+            x_core, _ = self._iter_solve(None, b_eff, op._matvec, fm_schur)
             x = op.recover_full(x_core, b)
             # v1.7.2: drop the Schur-reduced Krylov subspace handle and
             # the matvec closure references before the next wavelength
@@ -859,12 +1086,43 @@ class BEMStatIter(BEMIter):
         # dependent auxiliaries (_lambda, Schur state, _hlu_object).
         # Otherwise a follow-up solve at the same wavelength hits the
         # cache, finds _mat_lu=None, and crashes inside _mfun.
+        #
+        # v1.8 (VRAM-Schur): if _mat_lu carries an 'mgpu' tag, close the
+        # distributed LU handle and free its tiles before nulling out
+        # the reference.  Mirrors BEMStat.clear's distributed-LU cleanup.
+        old = self._mat_lu
+        if (isinstance(old, tuple) and len(old) == 3
+                and old[0] == 'mgpu' and old[1] is not None):
+            handle = old[1]
+            try:
+                handle.close()
+            except Exception:
+                pass
+            dm_old = getattr(handle, '_distmat_keepalive', None)
+            if dm_old is not None:
+                try:
+                    dm_old.free()
+                except Exception:
+                    pass
+                try:
+                    handle._distmat_keepalive = None
+                except Exception:
+                    pass
         self._mat_lu = None
         self.enei = None
         self._lambda = None
         self._schur_active = False
         self._schur_op = None
         self._hlu_object = None
+        # v1.8 (VRAM-Schur): drop the distributed-Schur keepalive that
+        # holds host M_ss LU + M_sc + M_cs + D_inv_C.  Safe no-op on the
+        # legacy path (attribute may not exist).
+        if hasattr(self, '_schur_reduce_keepalive'):
+            self._schur_reduce_keepalive = None
+        if hasattr(self, '_schur_dist_reduce_rhs'):
+            self._schur_dist_reduce_rhs = None
+        if hasattr(self, '_schur_dist_recover'):
+            self._schur_dist_recover = None
         # v1.7.2: explicit clear() means the user wants the device drained.
         # Without this the LU buffer just released above stays in the cupy
         # pool until the next solve triggers a free_all_blocks.
