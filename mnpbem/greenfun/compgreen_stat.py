@@ -752,6 +752,110 @@ class CompGreenStat(object):
         else:
             return tuple(results)
 
+    def eval_block(self, key, enei, col_start, col_stop):
+        """
+        Evaluate a column slice of the quasistatic Green function matrix.
+
+        Mirrors :meth:`mnpbem.greenfun.compgreen_ret.CompGreenRet.eval_block`
+        (the retarded sibling) so the same ``DistributedMatrix.from_func``
+        callback shape works for both solvers.  Quasistatic Green
+        functions are wavelength-independent (``k = 0``) so the
+        ``enei`` argument is accepted but ignored.
+
+        Parameters
+        ----------
+        key : str
+            Green function key (``'G'``, ``'F'``, ``'H1'``, ``'H2'``).
+            Derivative keys (``'Gp'``, ``'H1p'``, ``'H2p'``) are also
+            supported and return shape ``(p1.n, 3, ncol)``.
+        enei : float
+            Light wavelength in vacuum (nm).  Accepted for API parity
+            with :class:`CompGreenRet`; not used in the quasistatic
+            branch because the surface Laplacian / Coulomb kernel does
+            not depend on it.
+        col_start : int
+            Inclusive lower bound of the column range (global p2 index).
+        col_stop : int
+            Exclusive upper bound of the column range.
+
+        Returns
+        -------
+        g : ndarray
+            Sliced Green function tile of shape ``(p1.n, ncol)`` for
+            scalar keys, ``(p1.n, 3, ncol)`` for derivative keys.
+            ``np.allclose(g, eval(key)[..., col_start:col_stop])`` holds
+            exactly (the slice is a view).
+
+        Notes
+        -----
+        - Provided for use with
+          :meth:`mnpbem.utils.distributed_matrix.DistributedMatrix.from_func`
+          so the BEM build path can scatter the column tiles directly to
+          the GPUs that will own them.  In the quasistatic case the full
+          ``self.F`` / ``self.G`` is already on host (from
+          :meth:`_compute_greenstat`), so this method is a fast slice
+          rather than a per-block recomputation.
+        - Diagonal corrections (polar refinement, closed-surface fix,
+          analytical -2π fallback) are preserved because they are
+          baked into ``self.F`` before any slice is taken.
+        """
+        col_start = int(col_start)
+        col_stop = int(col_stop)
+        assert 0 <= col_start <= col_stop <= self.p2.n, \
+            ("[error] eval_block col range ({}, {}) out of bounds for "
+             "p2.n={}".format(col_start, col_stop, self.p2.n))
+
+        # Slice the appropriate matrix.  For H1/H2 we cannot reuse the
+        # eval('H1')/eval('H2') copy because it allocates a full (n1,
+        # n2) buffer; instead we slice ``self.F`` and apply the diagonal
+        # correction in-place on the slice.
+        if key == 'G':
+            return self.G[:, col_start:col_stop]
+        if key == 'F':
+            return self.F[:, col_start:col_stop]
+        if key == 'H1':
+            block = self.F[:, col_start:col_stop].copy()
+            if self.p1 is self.p2:
+                # Diagonal of F lives at column j and row j, so the
+                # entries that land inside the column slice are rows
+                # [col_start, col_stop) of the slice's local columns
+                # [0, ncol).
+                rows = np.arange(col_start, col_stop)
+                local_cols = np.arange(col_stop - col_start)
+                block[rows, local_cols] = self.F[rows, rows] + 2.0 * np.pi
+            return block
+        if key == 'H2':
+            block = self.F[:, col_start:col_stop].copy()
+            if self.p1 is self.p2:
+                rows = np.arange(col_start, col_stop)
+                local_cols = np.arange(col_stop - col_start)
+                block[rows, local_cols] = self.F[rows, rows] - 2.0 * np.pi
+            return block
+        if key == 'Gp':
+            Gp = self._eval_Gp()
+            return Gp[:, :, col_start:col_stop]
+        if key == 'H1p':
+            Gp = self._eval_Gp()
+            block = Gp[:, :, col_start:col_stop].copy()
+            if self.p1 is self.p2:
+                nvec = self.p1.nvec
+                rows = np.arange(col_start, col_stop)
+                local_cols = np.arange(col_stop - col_start)
+                block[rows, :, local_cols] = (
+                    Gp[rows, :, rows] + 2 * np.pi * nvec[rows])
+            return block
+        if key == 'H2p':
+            Gp = self._eval_Gp()
+            block = Gp[:, :, col_start:col_stop].copy()
+            if self.p1 is self.p2:
+                nvec = self.p1.nvec
+                rows = np.arange(col_start, col_stop)
+                local_cols = np.arange(col_stop - col_start)
+                block[rows, :, local_cols] = (
+                    Gp[rows, :, rows] - 2 * np.pi * nvec[rows])
+            return block
+        raise ValueError("[error] eval_block: unknown key '{}'".format(key))
+
     def _eval_G(self, ind=None):
         """Evaluate G matrix."""
         if ind is None:

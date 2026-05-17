@@ -33,6 +33,49 @@ def _vram_share_lu_kwargs() -> dict:
     return {'n_gpus': n_gpus, 'backend': backend}
 
 
+def _vram_share_active() -> bool:
+    """Return True iff the distributed-build path should be taken.
+
+    Mirrors ``BEMStat._vram_share_active``.  Off by default; user opts
+    in via ``MNPBEM_VRAM_SHARE_DISTRIBUTED=1``.
+    """
+    if not _CUPY_OK_MIRROR:
+        return False
+    if os.environ.get('MNPBEM_VRAM_SHARE', '0') != '1':
+        return False
+    if os.environ.get('MNPBEM_VRAM_SHARE_DISTRIBUTED', '0') != '1':
+        return False
+    try:
+        n_gpus = int(os.environ.get('MNPBEM_VRAM_SHARE_GPUS', '1'))
+    except (TypeError, ValueError):
+        n_gpus = 1
+    if n_gpus < 2:
+        return False
+    try:
+        from ..utils.multi_gpu_lu import cusolvermg_available
+        if not cusolvermg_available():
+            return False
+    except Exception:
+        return False
+    return True
+
+
+def _vram_share_distributed_kwargs() -> dict:
+    """Return ``{n_gpus, device_ids, block_size}`` for DistributedMatrix."""
+    try:
+        n_gpus = int(os.environ.get('MNPBEM_VRAM_SHARE_GPUS', '1'))
+    except (TypeError, ValueError):
+        n_gpus = 1
+    device_ids = None
+    dev_env = os.environ.get('MNPBEM_VRAM_SHARE_DEVICE_IDS', '')
+    if dev_env.strip():
+        try:
+            device_ids = [int(x) for x in dev_env.split(',') if x.strip()]
+        except Exception:
+            device_ids = None
+    return {'n_gpus': n_gpus, 'device_ids': device_ids, 'block_size': 256}
+
+
 def _gpu_pool_cleanup_mirror(apply_limit: bool = False) -> None:
     """Synchronise CUDA stream then drain cupy default + pinned pools."""
     if not _CUPY_OK_MIRROR:
@@ -151,6 +194,20 @@ class BEMStatMirror(object):
         if self.enei is not None and np.isclose(self.enei, enei):
             return self
 
+        # B-3 distributed multi-GPU build path: each per-symmetry F[i]
+        # is fed to a separate cuSolverMg LU through DistributedMatrix
+        # so the host never holds the full block of N x N matrices in
+        # memory together with the LU buffers.  Falls back to host
+        # build on any failure.
+        if _vram_share_active():
+            try:
+                return self._init_distributed_assemble(enei)
+            except Exception as e:  # pragma: no cover
+                import warnings
+                warnings.warn(
+                    '[warn] BEMStatMirror distributed assembly failed ({}); '
+                    'falling back to host build'.format(e))
+
         # v1.7.3 Phase 2: free any previous wavelength's LU list before
         # allocating new device-resident factors.  Mirrors the v1.7.2 BEMStat
         # pattern (cupy holds onto old LU buffers until the rebind below).
@@ -183,6 +240,121 @@ class BEMStatMirror(object):
         # v1.7.3 Phase 2: final pool drain so the next wavelength entry sees
         # a clean device.
         _gpu_pool_cleanup_mirror()
+        return self
+
+    def _init_distributed_assemble(self,
+            enei: float) -> 'BEMStatMirror':
+        """B-3 distributed multi-GPU build for the quasistatic mirror solver.
+
+        For each symmetry block the BEM matrix ``M_i = -(diag(Lambda) +
+        F[i])`` is built column-tile distributed via
+        :class:`mnpbem.utils.distributed_matrix.DistributedMatrix` and
+        factored with cuSolverMg.  ``self.F`` is a list of per-symmetry
+        N x N host arrays (already produced by
+        :func:`_mirror_stat_eval_host` at construction time), so the
+        per-tile callback slices each block directly — no extra Green
+        function recompute happens here.
+
+        Result residency
+        ----------------
+        - ``self.mat_lu`` becomes a list of ``('mgpu', MultiGPULU, None)``
+          tuples, one per symmetry.  ``_lu_solve_multi`` already routes
+          the tag through :func:`lu_solve_dispatch` so downstream
+          ``BEMStatMirror.solve`` consumers don't change.
+        """
+
+        import gc as _gc
+        from ..utils.distributed_matrix import DistributedMatrix
+        cp = _cp_mirror
+
+        dist_kw = _vram_share_distributed_kwargs()
+        n_gpus = int(dist_kw['n_gpus'])
+        device_ids = dist_kw['device_ids']
+        block_size = int(dist_kw['block_size'])
+        if device_ids is None:
+            device_ids = list(range(n_gpus))
+        assert len(device_ids) == n_gpus, \
+            '[error] MNPBEM_VRAM_SHARE_DEVICE_IDS length must equal MNPBEM_VRAM_SHARE_GPUS'
+
+        # ---- Per-wavelength cleanup: close stale per-symmetry LUs ----
+        old_list = getattr(self, 'mat_lu', None)
+        if isinstance(old_list, list):
+            for entry in old_list:
+                if (isinstance(entry, tuple) and len(entry) == 3
+                        and entry[0] == 'mgpu' and entry[1] is not None):
+                    handle = entry[1]
+                    try:
+                        handle.close()
+                    except Exception:
+                        pass
+                    dm_old = getattr(handle, '_distmat_keepalive', None)
+                    if dm_old is not None:
+                        try:
+                            dm_old.free()
+                        except Exception:
+                            pass
+                        try:
+                            handle._distmat_keepalive = None
+                        except Exception:
+                            pass
+        self.mat_lu = None
+        _gc.collect()
+        _gpu_pool_cleanup_mirror(apply_limit = True)
+
+        # ---- eps + Lambda ----
+        eps1 = self.p.eps1(enei)
+        eps2 = self.p.eps2(enei)
+        lambda_diag = (2 * np.pi * (eps1 + eps2) / (eps1 - eps2)).astype(
+            np.complex128)
+
+        # ---- Build per-symmetry M_i distributed and factor ----
+        self.mat_lu = []
+        for i, F_i in enumerate(self.F):
+            if not isinstance(F_i, np.ndarray):
+                # Skip empty/zero entries (matches legacy guard for
+                # symmetry slots with no contribution).
+                self.mat_lu.append(None)
+                continue
+            N_i = int(F_i.shape[0])
+            F_host_i = F_i  # already host numpy (from _mirror_stat_eval_host)
+
+            def _make_eval(F_arr, lam):
+                def _eval_M_tile(gpu_idx, c0, c1):
+                    # Promote real F slice to complex128 so the lambda
+                    # diagonal addition does not truncate / warn.
+                    block = F_arr[:, c0:c1].astype(np.complex128, copy=True)
+                    ncol = c1 - c0
+                    for k in range(ncol):
+                        j = c0 + k
+                        block[j, k] += lam[j]
+                    return -block
+                return _eval_M_tile
+
+            eval_fn = _make_eval(F_host_i, lambda_diag)
+            M_dm = DistributedMatrix.from_func(
+                shape=(N_i, N_i),
+                dtype=np.complex128,
+                n_gpus=n_gpus,
+                device_ids=device_ids,
+                block_size=block_size,
+                eval_func=eval_fn,
+            )
+            M_mglu = M_dm.lu_factor(backend='cusolvermg')
+            M_mglu._distmat_keepalive = M_dm  # type: ignore[attr-defined]
+            self.mat_lu.append(('mgpu', M_mglu, None))
+
+            # Drain pool between symmetries so the next iteration's
+            # build sees a clean device.
+            try:
+                for d in device_ids:
+                    cp.cuda.runtime.setDevice(d)
+                    cp.cuda.runtime.deviceSynchronize()
+                    cp.get_default_memory_pool().free_all_blocks()
+                cp.get_default_pinned_memory_pool().free_all_blocks()
+            except Exception:
+                pass
+
+        self.enei = enei
         return self
 
     def solve(self, exc: CompStructMirror) -> Tuple[CompStructMirror, 'BEMStatMirror']:
@@ -278,7 +450,28 @@ class BEMStatMirror(object):
         v1.7.3 Phase 2: API parity with BEMStat / BEMStatLayer / BEMStatIter.
         Drops the per-symmetry LU list and resets the cache gate so a
         subsequent solve() at the same wavelength does not skip rebuild.
+        B-3: close mgpu handles + free their distributed buffers.
         """
+        old_list = self.mat_lu
+        if isinstance(old_list, list):
+            for entry in old_list:
+                if (isinstance(entry, tuple) and len(entry) == 3
+                        and entry[0] == 'mgpu' and entry[1] is not None):
+                    handle = entry[1]
+                    try:
+                        handle.close()
+                    except Exception:
+                        pass
+                    dm_old = getattr(handle, '_distmat_keepalive', None)
+                    if dm_old is not None:
+                        try:
+                            dm_old.free()
+                        except Exception:
+                            pass
+                        try:
+                            handle._distmat_keepalive = None
+                        except Exception:
+                            pass
         self.mat_lu = None
         self.enei = None
         if _CUPY_OK_MIRROR:

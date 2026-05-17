@@ -11,6 +11,274 @@ from ..utils.gpu import lu_factor_dispatch, lu_solve_dispatch, to_host, is_cupy_
 from ..utils.matlab_compat import msqrt
 from .bem_iter import BEMIter
 
+
+# ---------------------------------------------------------------------------
+# v1.7.3 B-3 quasi-static distributed-build helpers (Agent D pattern)
+# ---------------------------------------------------------------------------
+
+def _vram_share_lu_kwargs_stat() -> dict:
+    """Read MNPBEM_VRAM_SHARE_* env vars and return kwargs for lu_factor_dispatch.
+
+    Mirrors ``bem_ret_iter._vram_share_lu_kwargs`` exactly (the helper is
+    duplicated here so the BEM module stays a single import boundary).
+    Returns an empty dict when VRAM-share is disabled so the call site is
+    bit-identical to the single-GPU path.  When enabled the returned
+    kwargs route ``lu_factor_dispatch`` through ``factor_multi_gpu``
+    (cuSolverMg by default) and the matrix is partitioned across
+    ``n_gpus`` devices.  Required for very large quasi-static meshes
+    (e.g. 25k+ faces) where the dense LU plus G/F/Lambda residents
+    exceed the 49 GB single-A6000 cap.
+    """
+    if os.environ.get('MNPBEM_VRAM_SHARE', '0') != '1':
+        return {}
+    n_gpus = int(os.environ.get('MNPBEM_VRAM_SHARE_GPUS', '1'))
+    if n_gpus <= 1:
+        return {}
+    backend = os.environ.get('MNPBEM_VRAM_SHARE_BACKEND', 'cusolvermg')
+    return {'n_gpus': n_gpus, 'backend': backend}
+
+
+def _vram_share_active_stat() -> bool:
+    """Return True when distributed-build is enabled for quasi-static iter.
+
+    Activation requirements mirror ``bem_ret_iter._vram_share_active``:
+    - ``MNPBEM_VRAM_SHARE=1``
+    - ``MNPBEM_VRAM_SHARE_DISTRIBUTED=1`` (gates the heavier distributed
+      build path; default off so existing call sites stay bit-identical)
+    - ``MNPBEM_VRAM_SHARE_GPUS>=2``
+    - cupy + cuSolverMg are importable
+
+    Distributed build assembles F (quasi-static BEM matrix) directly
+    across N GPUs via ``DistributedMatrix.from_func`` + the eval_block
+    callback, avoiding the host-resident full ``N x N`` matrix on a
+    single device during the precond LU pipeline.
+    """
+    if os.environ.get('MNPBEM_VRAM_SHARE', '0') != '1':
+        return False
+    if os.environ.get('MNPBEM_VRAM_SHARE_DISTRIBUTED', '0') != '1':
+        return False
+    try:
+        n_gpus = int(os.environ.get('MNPBEM_VRAM_SHARE_GPUS', '1'))
+    except (TypeError, ValueError):
+        return False
+    if n_gpus < 2:
+        return False
+    try:
+        import cupy as _cp_probe  # noqa: F401
+    except Exception:
+        return False
+    try:
+        from ..utils.multi_gpu_lu import cusolvermg_available
+        return bool(cusolvermg_available())
+    except Exception:
+        return False
+
+
+def _vram_share_env_config_stat() -> Tuple[int, str, Optional[List[int]]]:
+    """Resolve (n_gpus, backend, device_ids) for the distributed path.
+
+    Caller should already have checked ``_vram_share_active_stat()``.
+    """
+    n_gpus = int(os.environ.get('MNPBEM_VRAM_SHARE_GPUS', '1'))
+    backend = os.environ.get('MNPBEM_VRAM_SHARE_BACKEND', 'cusolvermg')
+    devs_env = os.environ.get('MNPBEM_VRAM_SHARE_DEVICE_IDS', '')
+    device_ids: Optional[List[int]] = None
+    if devs_env.strip():
+        try:
+            device_ids = [int(x) for x in devs_env.split(',') if x.strip()]
+            if len(device_ids) != n_gpus:
+                device_ids = None
+        except (TypeError, ValueError):
+            device_ids = None
+    return n_gpus, backend, device_ids
+
+
+def _compgreen_stat_eval_block(green: Any,
+        key: str,
+        c0: int,
+        c1: int) -> np.ndarray:
+    """Evaluate a column slice ``[c0, c1)`` of a CompGreenStat scalar key.
+
+    v1.7.3 Phase 3 (B-3) placeholder for ``CompGreenStat.eval_block`` while
+    Agent L is in flight.  Once Agent L lands, the call site below will be
+    swapped to ``green.eval_block(key, c0, c1)`` (no other change needed).
+
+    Quasi-static Green-function matrices (G, F, H1, H2) are
+    wavelength-independent and pre-computed in ``CompGreenStat.__init__``,
+    so the slice can be served directly from the cached self.G / self.F
+    arrays.  H1/H2 add the diagonal ±2π correction only on the closed-
+    surface (p1 is p2) diagonal blocks; that correction must be applied
+    over the slice's global row indices when the slice overlaps the
+    main diagonal.
+
+    Parameters
+    ----------
+    green : CompGreenStat
+        Green function instance.  Must already have ``self.G`` / ``self.F``
+        materialised (the ``__init__`` pipeline does this eagerly).
+    key : str
+        ``'G'``, ``'F'``, ``'H1'`` or ``'H2'``.
+    c0, c1 : int
+        Column range (global p2 indices) — ``[c0, c1)``.
+
+    Returns
+    -------
+    np.ndarray
+        Sliced matrix of shape ``(p1.n, c1 - c0)`` with the same dtype as
+        the underlying full matrix.
+    """
+    c0 = int(c0)
+    c1 = int(c1)
+
+    # Defensive: callers should not pass empty slices but DistributedMatrix
+    # may issue them when the global N is not divisible by n_gpus.
+    if c1 <= c0:
+        n_rows = green.G.shape[0] if hasattr(green, 'G') else green.F.shape[0]
+        return np.zeros((n_rows, 0), dtype = complex)
+
+    if key == 'G':
+        return green.G[:, c0:c1].copy()
+    elif key == 'F':
+        return green.F[:, c0:c1].copy()
+    elif key == 'H1':
+        # H1 = F + 2π · I on the closed-surface diagonal.  The slice may
+        # overlap the diagonal only where col index == row index, so we
+        # add 2π only to the entries (i, i - c0) for i in [c0, c1).
+        H1 = green.F[:, c0:c1].copy()
+        if green.p1 is green.p2:
+            for i in range(c0, c1):
+                H1[i, i - c0] += 2.0 * np.pi
+        return H1
+    elif key == 'H2':
+        H2 = green.F[:, c0:c1].copy()
+        if green.p1 is green.p2:
+            for i in range(c0, c1):
+                H2[i, i - c0] -= 2.0 * np.pi
+        return H2
+    else:
+        raise ValueError(
+                '[error] _compgreen_stat_eval_block: unsupported key <{}> '
+                '(expected G/F/H1/H2)'.format(key))
+
+
+def _distributed_block_assemble_stat(green: Any,
+        ncomb_list: List[Tuple[str, int]],
+        nrows: int,
+        ncols: int,
+        n_gpus: int,
+        device_ids: Optional[List[int]]) -> Any:
+    """Build a linear combination of CompGreenStat scalar-key blocks distributed.
+
+    Mirrors ``bem_ret_iter._distributed_block_assemble`` but specialised to
+    the quasi-static case where Green-function matrices are
+    wavelength-independent and there is no (i, j) region pair (the
+    composite particle is a single object).  ``ncomb_list`` is a list of
+    ``(key, sign)`` tuples, e.g. ``[('F', 1)]`` for plain F,
+    ``[('F', 1), ('G', -1)]`` for F - G, etc.
+
+    Per-GPU eval_func sums ``sign · <key-slice>`` over the column tile
+    owned by that GPU, then the DistributedMatrix scatter writes the
+    result into the per-GPU local_array.  No full ``N x N`` matrix ever
+    materialises on a single device during the build.
+
+    Parameters
+    ----------
+    green : CompGreenStat
+        Green function instance (must expose ``G`` and ``F`` attributes).
+    ncomb_list : list of (str, int)
+        Linear combination terms.
+    nrows, ncols : int
+        Output matrix shape.
+    n_gpus : int
+        Number of GPUs to distribute over.
+    device_ids : list of int, optional
+        Explicit device id mapping; falls back to ``range(n_gpus)``.
+
+    Returns
+    -------
+    DistributedMatrix
+        Caller does ``.to_host()`` when it needs a host copy for the
+        downstream LU / matvec pipeline.
+    """
+    from ..utils.distributed_matrix import DistributedMatrix
+    import numpy as _np_local
+
+    try:
+        import cupy as _cp_local  # type: ignore
+        _cp_ok = True
+    except Exception:
+        _cp_local = None  # type: ignore
+        _cp_ok = False
+
+    # Prefer the real CompGreenStat.eval_block (Agent L) when available.
+    # Agent L's signature is (key, enei, col_start, col_stop) — enei is
+    # accepted but ignored on the quasi-static side.  Older binaries that
+    # don't have eval_block fall back to the in-module placeholder, which
+    # slices self.G / self.F directly with the same diagonal correction
+    # semantics.
+    _have_real_eval_block = hasattr(green, 'eval_block')
+
+    def _safe_eval(key: str, c0: int, c1: int) -> Any:
+        if _have_real_eval_block:
+            # Try Agent L's 4-arg signature first; if a hypothetical
+            # future revision drops enei, fall back to a 3-arg call.
+            try:
+                return green.eval_block(key, 0.0, c0, c1)
+            except TypeError:
+                return green.eval_block(key, c0, c1)
+        return _compgreen_stat_eval_block(green, key, c0, c1)
+
+    def _is_cupy(x: Any) -> bool:
+        return _cp_ok and isinstance(x, _cp_local.ndarray)
+
+    def _coerce_pair(a: Any, b: Any) -> Tuple[Any, Any]:
+        if _is_cupy(a) or _is_cupy(b):
+            if not _is_cupy(a):
+                a = _cp_local.asarray(a, dtype = _np_local.complex128)
+            if not _is_cupy(b):
+                b = _cp_local.asarray(b, dtype = _np_local.complex128)
+        return a, b
+
+    def _evalfn(gpu_idx: int, c0: int, c1: int) -> Any:
+        out = None
+        for (key, sign) in ncomb_list:
+            blk = _safe_eval(key, c0, c1)
+            # Coerce dtype up-front so downstream arithmetic is clean.
+            if isinstance(blk, (int, float)) and blk == 0:
+                blk = _np_local.zeros(
+                        (nrows, c1 - c0), dtype = _np_local.complex128)
+            if out is None:
+                if sign == 1:
+                    out = (blk.copy() if hasattr(blk, 'copy')
+                            else _np_local.asarray(blk).copy())
+                elif sign == -1:
+                    out = -blk
+                else:
+                    out = sign * blk
+            else:
+                out, blk = _coerce_pair(out, blk)
+                if sign == 1:
+                    out = out + blk
+                elif sign == -1:
+                    out = out - blk
+                else:
+                    out = out + sign * blk
+        # Ensure dtype is the DistributedMatrix dtype so scatter is
+        # straight memcpy without intermediate cast.
+        if hasattr(out, 'dtype') and out.dtype != _np_local.complex128:
+            if _is_cupy(out):
+                out = out.astype(_np_local.complex128)
+            else:
+                out = _np_local.asarray(out, dtype = _np_local.complex128)
+        return out
+
+    return DistributedMatrix.from_func(
+            shape = (nrows, ncols),
+            dtype = np.complex128,
+            n_gpus = n_gpus,
+            eval_func = _evalfn,
+            device_ids = device_ids)
+
 # v1.7.2 GPU memory-pool cleanup: mirror BEMRet's wavelength-end immediate free
 # pattern so cupy returns blocks to the driver at every wavelength rather than
 # accumulating across the sweep (MATLAB-parity).  When cupy is not importable
@@ -151,7 +419,89 @@ class BEMStatIter(BEMIter):
 
         # Surface derivative of Green function
         # MATLAB: obj.F = eval(obj.g, 'F')
-        self.F = self._g.F
+        # v1.7.3 Phase 3 (B-3): when distributed build is active AND we are
+        # on the dense (non-H-matrix) path, build the F matrix via
+        # ``DistributedMatrix.from_func`` + ``CompGreenStat.eval_block`` so
+        # the per-GPU column tile is ~(N · N/n_gpus · 16 B) instead of
+        # the full ``N x N`` complex128 on a single device.  For
+        # quasi-static F is wavelength-independent so this happens once
+        # at construction time and the result is cached on self.F /
+        # self._F_distributed_built.  The downstream LU dispatch
+        # (``_init_matrices``) consumes self.F directly.
+        #
+        # Note: BEMStatIter's F is enei-independent, so unlike BEMRetIter
+        # we do NOT rebuild the distributed assembly per-wavelength —
+        # the host F is built once and reused for all enei values.
+        # The distributed-build memory win is mostly in keeping the build
+        # itself off a single GPU; the resulting host F is what feeds
+        # the (-Lambda - F) LU below.
+        self._F_distributed_built = False
+        if (_vram_share_active_stat()
+                and not self._hmatrix
+                and not (hmode is not None)):
+            try:
+                self._build_distributed_F()
+                self._F_distributed_built = True
+            except Exception as exc:
+                print('[info] BEMStatIter init: distributed F build failed '
+                        '({}), falling back to host F.'.format(exc),
+                        flush = True)
+                self.F = self._g.F
+        else:
+            self.F = self._g.F
+
+    def _build_distributed_F(self) -> None:
+        """v1.7.3 Phase 3 (B-3): build F via distributed column-tile assembly.
+
+        Activated by ``MNPBEM_VRAM_SHARE_DISTRIBUTED=1`` and gated by
+        ``_vram_share_active_stat()``.  The quasi-static F matrix is
+        wavelength-independent, so this runs exactly once at solver
+        construction (vs once per wavelength for the retarded sibling).
+
+        Per-GPU column tile is ~``N · (N / n_gpus) · 16 B``; at N=15072 with
+        n_gpus=4 that's ~0.9 GB per GPU vs ~3.6 GB for a single-device
+        full build.  After distributed assembly the tiles are gathered to
+        host once via ``.to_host()`` and cached on ``self.F``; the
+        downstream LU (``_init_matrices``) reads the host F and routes
+        the actual factorisation through cuSolverMg via
+        ``_vram_share_lu_kwargs_stat()``.
+
+        Bit-identical to the legacy ``self.F = self._g.F`` path to the
+        floating-point tolerance of ufunc ordering; only the *transient*
+        memory profile differs (and only when the env vars are set).
+        """
+        green = self._g
+        if not hasattr(green, 'eval_block') and not hasattr(green, 'F'):
+            raise RuntimeError(
+                    '[error] BEMStatIter distributed F build requires '
+                    'CompGreenStat with eval_block or .F (got {})'
+                    .format(type(green)))
+
+        nfaces = green.F.shape[0]
+        n_gpus, backend, device_ids = _vram_share_env_config_stat()
+
+        print('[info] BEMStatIter init: distributed F build '
+                '(N={}, n_gpus={}, backend={}).'
+                .format(nfaces, n_gpus, backend),
+                flush = True)
+
+        dm_F = _distributed_block_assemble_stat(
+                green,
+                ncomb_list = [('F', 1)],
+                nrows = nfaces, ncols = nfaces,
+                n_gpus = n_gpus, device_ids = device_ids)
+        # Gather once to host so the downstream _init_matrices/_init_precond
+        # pipeline (which reads self.F) sees the canonical layout.  The
+        # per-GPU tiles are freed immediately after gather; the dense LU
+        # below allocates its own multi-GPU partition through
+        # ``lu_factor_dispatch`` + ``factor_multi_gpu``.
+        self.F = dm_F.to_host()
+        dm_F.free()
+        if _CUPY_OK_STAT:
+            _cp_stat.cuda.runtime.deviceSynchronize()
+            _cp_stat.get_default_memory_pool().free_all_blocks()
+            _cp_stat.get_default_pinned_memory_pool().free_all_blocks()
+        _gpu_pool_cleanup_stat()
 
     def _init_matrices(self,
             enei: float) -> 'BEMStatIter':
@@ -214,13 +564,25 @@ class BEMStatIter(BEMIter):
             else:
                 Lambda = np.diag(self._lambda)
 
+            # v1.7.3 Phase 3 (B-3): when ``MNPBEM_VRAM_SHARE=1`` AND
+            # ``MNPBEM_VRAM_SHARE_GPUS>=2``, ``_vram_share_lu_kwargs_stat()``
+            # returns ``{'n_gpus': N, 'backend': '<backend>'}`` and
+            # ``lu_factor_dispatch`` routes the dense LU through
+            # ``factor_multi_gpu`` (cuSolverMg by default).  The (-Lambda - F)
+            # matrix is partitioned column-block round-robin across N
+            # devices.  When the env vars are not set the kwargs dict is
+            # empty and the call is bit-identical to the single-GPU path.
+            _lu_kwargs = _vram_share_lu_kwargs_stat()
+
             if self.precond == 'hmat':
                 # MATLAB: obj.mat = lu(-lambda - F)
-                self._mat_lu = lu_factor_dispatch(-Lambda - F_dense)
+                self._mat_lu = lu_factor_dispatch(-Lambda - F_dense,
+                        **_lu_kwargs)
 
             elif self.precond == 'full':
                 # MATLAB: obj.mat = inv(-lambda - full(F))
-                self._mat_lu = lu_factor_dispatch(-Lambda - F_dense)
+                self._mat_lu = lu_factor_dispatch(-Lambda - F_dense,
+                        **_lu_kwargs)
 
             else:
                 raise ValueError('[error] preconditioner not known: <{}>'.format(self.precond))

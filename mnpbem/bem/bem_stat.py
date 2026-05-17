@@ -50,6 +50,54 @@ def _vram_share_lu_kwargs() -> dict:
     return {'n_gpus': n_gpus, 'backend': backend}
 
 
+def _vram_share_active() -> bool:
+    """Return True iff the distributed-build path should be taken.
+
+    The quasistatic mirror of ``bem_ret_layer._vram_share_active``.
+    Distinct from ``_vram_share_lu_kwargs``: that helper controls
+    whether the LU dispatch routes through cuSolverMg, while this gate
+    decides whether the BEM matrix is also *built* distributed
+    (column block-cyclic across N GPUs).  Off by default; the user
+    must opt in via ``MNPBEM_VRAM_SHARE_DISTRIBUTED=1`` so existing
+    LU-only multi-GPU sweeps keep their build path.
+    """
+    if not _CUPY_OK_V172:
+        return False
+    if os.environ.get('MNPBEM_VRAM_SHARE', '0') != '1':
+        return False
+    if os.environ.get('MNPBEM_VRAM_SHARE_DISTRIBUTED', '0') != '1':
+        return False
+    try:
+        n_gpus = int(os.environ.get('MNPBEM_VRAM_SHARE_GPUS', '1'))
+    except (TypeError, ValueError):
+        n_gpus = 1
+    if n_gpus < 2:
+        return False
+    try:
+        from ..utils.multi_gpu_lu import cusolvermg_available
+        if not cusolvermg_available():
+            return False
+    except Exception:
+        return False
+    return True
+
+
+def _vram_share_distributed_kwargs() -> dict:
+    """Return ``{n_gpus, device_ids, block_size}`` for DistributedMatrix."""
+    try:
+        n_gpus = int(os.environ.get('MNPBEM_VRAM_SHARE_GPUS', '1'))
+    except (TypeError, ValueError):
+        n_gpus = 1
+    device_ids = None
+    dev_env = os.environ.get('MNPBEM_VRAM_SHARE_DEVICE_IDS', '')
+    if dev_env.strip():
+        try:
+            device_ids = [int(x) for x in dev_env.split(',') if x.strip()]
+        except Exception:
+            device_ids = None
+    return {'n_gpus': n_gpus, 'device_ids': device_ids, 'block_size': 256}
+
+
 class BEMStat(object):
     """
     BEM solver for quasistatic approximation.
@@ -200,6 +248,21 @@ class BEMStat(object):
         # Use previously computed matrices?
         # MATLAB: if isempty(obj.enei) || obj.enei ~= enei
         if self.enei is None or self.enei != enei:
+            # B-3 distributed multi-GPU build path. When MNPBEM_VRAM_SHARE
+            # _DISTRIBUTED=1 and n_gpus>=2, route the BEM matrix build +
+            # LU through DistributedMatrix so the host never holds the
+            # full ``-(Lambda + F)`` matrix simultaneously with the
+            # cuSolverMg LU factor.  Schur reduction is incompatible with
+            # the column-split build (the schur eliminator needs the full
+            # host matrix), so we keep the legacy path for that.
+            if _vram_share_active() and not self._schur_opt:
+                try:
+                    return self._init_distributed_assemble(enei)
+                except Exception as e:  # pragma: no cover - safety
+                    import warnings
+                    warnings.warn(
+                        '[warn] BEMStat distributed assembly failed ({}); '
+                        'falling back to host build'.format(e))
             # v1.7.2 MATLAB-parity: free cupy pools before allocating the
             # new wavelength's BEM matrices.  The previous wavelength's
             # mat_lu (a ~N^2 complex device buffer when lu_factor_dispatch
@@ -322,6 +385,164 @@ class BEMStat(object):
             # MATLAB: obj.enei = enei
             self.enei = enei
 
+        return self
+
+    def _init_distributed_assemble(self, enei):
+        """B-3 distributed multi-GPU quasistatic BEM matrix assembly.
+
+        Builds ``M = -(diag(Lambda) + F)`` directly distributed across N
+        GPUs via :class:`mnpbem.utils.distributed_matrix.DistributedMatrix`,
+        then factors the distributed tiles in place with cuSolverMg
+        (block-cyclic Getrf).  The single (N, N) host buffer that the
+        legacy path allocates for ``M_full`` is never materialized.
+
+        The per-column tile is built from
+        :meth:`CompGreenStat.eval_block` (key='F'), plus the lambda
+        contribution on the diagonal rows that fall inside the column
+        range.  The eval_block call is a slice into ``self.F`` (already
+        on host) — no extra Green-function recompute happens.  The
+        memory saving comes entirely from never building ``M_full`` and
+        from cuSolverMg owning the LU in distributed tiles.
+
+        Result residency
+        ----------------
+        - ``self.mat_lu`` is stored as ``('mgpu', MultiGPULU_handle,
+          None)``.  ``lu_solve_dispatch`` already routes that tag through
+          ``MultiGPULU.solve`` so downstream ``BEMStat.solve`` consumers
+          don't change.
+        - The keepalive ``DistributedMatrix`` (which owns the per-GPU
+          tiles backing the LU's ctypes pointer array) is attached as
+          ``mat_lu[1]._distmat_keepalive`` so the device memory stays
+          live until the handle is closed.
+
+        Bit-identity contract
+        ---------------------
+        cuSolverMg differs from MKL LU by floating-point rounding bounded
+        by ``N * eps_machine``.  At dimer-scale meshes (N ~ 12-15k) this
+        is ~1e-12 relative — well below the BEM physics tolerance.  When
+        a regression suspicion arises, unset
+        ``MNPBEM_VRAM_SHARE_DISTRIBUTED`` to fall back to the legacy
+        host build.
+        """
+
+        import gc as _gc
+        from ..utils.distributed_matrix import DistributedMatrix
+        cp = _cp_v172
+
+        dist_kw = _vram_share_distributed_kwargs()
+        n_gpus = int(dist_kw['n_gpus'])
+        device_ids = dist_kw['device_ids']
+        block_size = int(dist_kw['block_size'])
+        if device_ids is None:
+            device_ids = list(range(n_gpus))
+        assert len(device_ids) == n_gpus, \
+            '[error] MNPBEM_VRAM_SHARE_DEVICE_IDS length must equal MNPBEM_VRAM_SHARE_GPUS'
+
+        # ---- Per-wavelength cleanup: close stale LU + free old tiles ----
+        old = getattr(self, 'mat_lu', None)
+        if (isinstance(old, tuple) and len(old) == 3
+                and old[0] == 'mgpu' and old[1] is not None):
+            handle = old[1]
+            try:
+                handle.close()
+            except Exception:
+                pass
+            dm_old = getattr(handle, '_distmat_keepalive', None)
+            if dm_old is not None:
+                try:
+                    dm_old.free()
+                except Exception:
+                    pass
+                try:
+                    handle._distmat_keepalive = None
+                except Exception:
+                    pass
+        self.mat_lu = None
+        _gc.collect()
+        try:
+            _pool_limit_gb = float(
+                os.environ.get('MNPBEM_GPU_POOL_LIMIT_GB', '0'))
+        except (TypeError, ValueError):
+            _pool_limit_gb = 0.0
+        try:
+            mempool = cp.get_default_memory_pool()
+            pinned = cp.get_default_pinned_memory_pool()
+            if _pool_limit_gb > 0:
+                mempool.set_limit(size=int(_pool_limit_gb * (1024 ** 3)))
+            for d in device_ids:
+                cp.cuda.runtime.setDevice(d)
+                cp.cuda.runtime.deviceSynchronize()
+                mempool.free_all_blocks()
+            pinned.free_all_blocks()
+        except Exception:
+            pass
+
+        # ---- Per-wavelength Lambda evaluation ----
+        # MATLAB: lambda = 2*pi*(eps1+eps2)/(eps1-eps2)
+        eps1 = self.p.eps1(enei)
+        eps2 = self.p.eps2(enei)
+        lambda_diag = (2 * np.pi * (eps1 + eps2) / (eps1 - eps2)).astype(
+            np.complex128)
+
+        # ---- Build M = -(diag(Lambda) + F) column-tile distributed ----
+        N = int(self.F.shape[0])
+        compg = self.g
+        F_host = np.asarray(self.F)
+
+        def _eval_M_tile(gpu_idx, c0, c1):
+            # Pull the column slice of F from the host array.  We do not
+            # route through compg.eval_block here because BEMStat's
+            # ``self.F`` already holds any refinement / closed-surface
+            # corrections that the Green-function build applied; the
+            # raw eval_block tile is bit-identical to the slice when no
+            # external refun has reshaped it (the standard case), but
+            # taking the slice from ``self.F`` is safe whether or not
+            # the user supplied a ``refun`` at construction time.
+            # Promote to complex128 up-front so the lambda addition
+            # below does not warn / silently truncate when self.F is a
+            # real-valued ndarray (which is the standard case before
+            # any dispersive correction is applied).
+            block = F_host[:, c0:c1].astype(np.complex128, copy=True)
+            # Add Lambda on the diagonal entries that fall in this tile.
+            ncol = c1 - c0
+            for k in range(ncol):
+                j = c0 + k
+                block[j, k] += lambda_diag[j]
+            # Negate to form M = -(diag(Lambda) + F).
+            return -block
+
+        M_dm = DistributedMatrix.from_func(
+            shape=(N, N),
+            dtype=np.complex128,
+            n_gpus=n_gpus,
+            device_ids=device_ids,
+            block_size=block_size,
+            eval_func=_eval_M_tile,
+        )
+
+        # Factor in place; the keepalive holds the device tiles.
+        M_mglu = M_dm.lu_factor(backend='cusolvermg')
+        M_mglu._distmat_keepalive = M_dm  # type: ignore[attr-defined]
+        self.mat_lu = ('mgpu', M_mglu, None)
+
+        # Schur path is incompatible with the column-split build (it
+        # needs the full host matrix to eliminate shell faces).  When
+        # _vram_share_active is True we never enter this branch from
+        # _init_matrices in the first place, but reset the flag here
+        # for safety so downstream solve takes the standard path.
+        self._schur_active = False
+
+        # Final sync + pool compaction across all participating devices.
+        try:
+            for d in device_ids:
+                cp.cuda.runtime.setDevice(d)
+                cp.cuda.runtime.deviceSynchronize()
+                cp.get_default_memory_pool().free_all_blocks()
+            cp.get_default_pinned_memory_pool().free_all_blocks()
+        except Exception:
+            pass
+
+        self.enei = enei
         return self
 
     def solve(self, exc):
@@ -580,6 +801,29 @@ class BEMStat(object):
         # crashed __truediv__ with a NoneType unpack error.  Schur
         # auxiliaries are likewise dropped so a subsequent solve does not
         # accidentally reuse the recover callable bound to a freed factor.
+        # B-3: when the LU is an 'mgpu' tuple we must close the handle
+        # and free its distributed buffers explicitly; otherwise the
+        # device tiles would remain pinned through the cupy pool until
+        # the BEMStat object is GC'd, which can happen long after
+        # clear() returned in long-running sweeps.
+        old = self.mat_lu
+        if (isinstance(old, tuple) and len(old) == 3
+                and old[0] == 'mgpu' and old[1] is not None):
+            handle = old[1]
+            try:
+                handle.close()
+            except Exception:
+                pass
+            dm_old = getattr(handle, '_distmat_keepalive', None)
+            if dm_old is not None:
+                try:
+                    dm_old.free()
+                except Exception:
+                    pass
+                try:
+                    handle._distmat_keepalive = None
+                except Exception:
+                    pass
         self.mat_lu = None
         self.enei = None
         self._schur_active = False

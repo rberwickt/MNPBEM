@@ -1509,6 +1509,22 @@ class HMatrixMultiGPU(HMatrix):
     # ------------------------------------------------------------------
     # ACA fill (multi-GPU).
     # ------------------------------------------------------------------
+    def _build_mode(self) -> str:
+        """Return 'gpu' or 'cpu' depending on ``MNPBEM_HMATRIX_MGPU_BUILD``.
+
+        - 'gpu' (default): ACA fill runs on the owner device.  Faster for
+          a small number of huge cluster pairs.
+        - 'cpu': ACA fill runs on the host (numba/numpy) and only the
+          *resulting* U/V/dense blocks are migrated to the owner device.
+          Much faster for meshes with thousands of small/medium pairs
+          (no per-block GPU launch latency), but it does not exercise
+          the GPU memory budget during build (peak is host-resident).
+        """
+        mode = os.environ.get('MNPBEM_HMATRIX_MGPU_BUILD', 'gpu').strip().lower()
+        if mode not in ('gpu', 'cpu'):
+            mode = 'gpu'
+        return mode
+
     def aca(self, fun: Callable) -> 'HMatrixMultiGPU':
         """Fill blocks across N GPUs (or fall back to CPU)."""
         if self._mgpu_force_cpu or not _hmat_mgpu_available(min_devices=2):
@@ -1616,15 +1632,16 @@ class HMatrixMultiGPU(HMatrix):
             self.lhs[i] = U_h
             self.rhs[i] = V_h
 
+        build_mode = self._build_mode()
+
         for g in range(n_gpus):
             dev_id = device_ids[g]
             with _cp_local.cuda.Device(dev_id):
-                # Dense blocks.  Evaluate the full block on the owner device
-                # by calling ``fun_c`` on host indices, then promoting the
-                # result to cupy.  The host trip is unavoidable because
-                # ``fun`` is typically a host callable that returns numpy
-                # (e.g. CompGreenRet.eval); ``aca_gpu`` already does the same
-                # wrap-and-upload step per probe.
+                # Dense blocks.  Evaluate the full block on host, then
+                # upload onto the owner device.  The host trip is unavoidable
+                # because ``fun`` is typically a host callable that returns
+                # numpy (e.g. CompGreenRet.eval); ``aca_gpu`` already does
+                # the same wrap-and-upload step per probe.
                 for i in dense_by_owner[g]:
                     indr = tree.cind[self.row1[i]]
                     indc = tree.cind[self.col1[i]]
@@ -1644,16 +1661,29 @@ class HMatrixMultiGPU(HMatrix):
                     self.val[i] = vals_d
                     bytes_per_gpu[g] += int(vals_d.nbytes)
 
-                # Low-rank blocks via ACA on the owner device.
+                # Low-rank blocks: ACA via the chosen build path.
+                #   'gpu' — entire ACA loop on the owner device (one host
+                #           trip per probe, but residual ops stay on GPU).
+                #   'cpu' — ACA loop on host (numpy/numba); only the
+                #           resulting U/V tiles are uploaded.  Faster when
+                #           there are many small/medium pairs because the
+                #           per-call CUDA launch overhead would otherwise
+                #           dominate the actual flops.
                 for i in lr_by_owner[g]:
                     indr = tree.cind[self.row2[i]]
                     indc = tree.cind[self.col2[i]]
                     rows = np.arange(indr[0], indr[1] + 1, dtype=np.int64)
                     cols = np.arange(indc[0], indc[1] + 1, dtype=np.int64)
-                    U_d, V_d = _aca_gpu.aca_block_gpu(
-                            fun_c, rows, cols,
-                            htol=self.htol, kmax=self.kmax,
-                            return_gpu=True)
+                    if build_mode == 'cpu':
+                        U_h, V_h = self._aca_block(
+                                fun_c, rows, cols, self.htol, self.kmax)
+                        U_d = _cp_local.asarray(U_h)
+                        V_d = _cp_local.asarray(V_h)
+                    else:
+                        U_d, V_d = _aca_gpu.aca_block_gpu(
+                                fun_c, rows, cols,
+                                htol=self.htol, kmax=self.kmax,
+                                return_gpu=True)
                     self.lhs[i] = U_d
                     self.rhs[i] = V_d
                     bytes_per_gpu[g] += int(U_d.nbytes) + int(V_d.nbytes)
@@ -1682,6 +1712,7 @@ class HMatrixMultiGPU(HMatrix):
             'host_dense_count': host_dense_count,
             'host_lowrank_count': host_lr_count,
             'small_block_threshold': thr,
+            'build_mode': build_mode,
         }
         return self
 
@@ -1840,6 +1871,66 @@ class HMatrixMultiGPU(HMatrix):
         return result
 
     # ------------------------------------------------------------------
+    # Dense reconstruction (multi-device aware).
+    # ------------------------------------------------------------------
+    def full(self, xp: Any = None) -> Any:
+        """Return the full N x N matrix.
+
+        When multi-GPU is active, blocks live on different CUDA devices.
+        The base :meth:`HMatrix.full` assumes a single backend, so we pull
+        every device-resident block to host before delegating to the
+        base implementation.  Setting ``xp=cp`` after the gather is
+        supported but only re-uploads to the *default* CUDA device — for
+        most consumers (precond build, dense-LU verification, test
+        assertions) the host gather is the desired output anyway.
+        """
+        if not self._mgpu_used:
+            return super().full(xp=xp)
+
+        import cupy as _cp_local
+
+        # Pull every device block to host on its owner device, then
+        # delegate to the base implementation with xp=np.
+        n_blocks_dense = len(self.row1)
+        n_blocks_lr = len(self.row2)
+        val_back = list(self.val)
+        lhs_back = list(self.lhs)
+        rhs_back = list(self.rhs)
+
+        try:
+            for i in range(n_blocks_dense):
+                owner = self._owner_dense[i]
+                blk = self.val[i]
+                if (owner >= 0 and blk is not None and hasattr(blk, 'get')
+                        and not isinstance(blk, np.ndarray)):
+                    with _cp_local.cuda.Device(
+                            self._mgpu_stats['device_ids'][owner]):
+                        self.val[i] = _cp_local.asnumpy(blk)
+            for i in range(n_blocks_lr):
+                owner = self._owner_lowrank[i]
+                lhs = self.lhs[i]
+                rhs = self.rhs[i]
+                if (owner >= 0 and lhs is not None and hasattr(lhs, 'get')
+                        and not isinstance(lhs, np.ndarray)):
+                    with _cp_local.cuda.Device(
+                            self._mgpu_stats['device_ids'][owner]):
+                        self.lhs[i] = _cp_local.asnumpy(lhs)
+                if (owner >= 0 and rhs is not None and hasattr(rhs, 'get')
+                        and not isinstance(rhs, np.ndarray)):
+                    with _cp_local.cuda.Device(
+                            self._mgpu_stats['device_ids'][owner]):
+                        self.rhs[i] = _cp_local.asnumpy(rhs)
+
+            return super().full(xp=xp if xp is not None else np)
+        finally:
+            # Restore device blocks so subsequent matvec stays GPU-resident.
+            for i in range(n_blocks_dense):
+                self.val[i] = val_back[i]
+            for i in range(n_blocks_lr):
+                self.lhs[i] = lhs_back[i]
+                self.rhs[i] = rhs_back[i]
+
+    # ------------------------------------------------------------------
     # Helpers for tests / reporting.
     # ------------------------------------------------------------------
     @property
@@ -1849,6 +1940,34 @@ class HMatrixMultiGPU(HMatrix):
     @property
     def mgpu_stats(self) -> Dict[str, Any]:
         return dict(self._mgpu_stats)
+
+    def free_devices(self) -> None:
+        """Release device-resident blocks and drain per-device pools.
+
+        Call between wavelengths in a spectrum sweep to keep the high-
+        water mark stable.  The H-matrix is left in an unusable state
+        after this call; rebuild via ``aca`` if you need it again.
+        """
+        if not self._mgpu_used:
+            return
+        try:
+            import cupy as _cp_local
+        except Exception:
+            return
+        for i in range(len(self.row1)):
+            self.val[i] = None
+        for i in range(len(self.row2)):
+            self.lhs[i] = None
+            self.rhs[i] = None
+        device_ids = self._mgpu_stats.get('device_ids', [])
+        for dev_id in device_ids:
+            try:
+                with _cp_local.cuda.Device(dev_id):
+                    _cp_local.cuda.runtime.deviceSynchronize()
+                    _cp_local.get_default_memory_pool().free_all_blocks()
+            except Exception:
+                pass
+        self._mgpu_used = False
 
     @staticmethod
     def from_func(tree: ClusterTree,

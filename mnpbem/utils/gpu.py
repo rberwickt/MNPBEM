@@ -385,11 +385,19 @@ def eigh_dispatch(A: np.ndarray,
 
     # 2. full-spectrum path
     # 2a. multi-GPU cuSolverMg path — opt-in via MNPBEM_GPU_EIGH_MGPU=1.
-    # The cusolverMgSyevd binding works on synthetic Hermitian matrices
-    # but NVIDIA's per-device workspace size requirement is touchy
-    # (segfault on some n / device combinations), so the default off
-    # keeps regressions zero.  Set MNPBEM_GPU_EIGH_MGPU=1 explicitly
-    # to opt into the distributed eigh path.
+    #
+    # v1.7.5 — Three fixes make the binding production-ready:
+    #   (1) Pass ``W`` as a host pointer (NVIDIA sample pattern); device
+    #       pointer caused SIGSEGV during the Householder back-transform.
+    #   (2) Call ``cudaDeviceEnablePeerAccess`` between every device
+    #       pair before grid creation (also from the NVIDIA sample).
+    #   (3) Cache the cusolverMg handle + grid at the class level; CUDA
+    #       12.4 returns status 6 (EXECUTION_FAILED) on the second
+    #       ``cusolverMgCreate`` in the same process.
+    #
+    # The path is still opt-in (default OFF) because we have not yet
+    # tested it across all production matrix sizes / dtypes.  Set
+    # ``MNPBEM_GPU_EIGH_MGPU=1`` to enable.
     env_n, _, env_devs = _vram_share_env_defaults()
     want_mgeig = (
         os.environ.get('MNPBEM_GPU_EIGH_MGPU', '0').strip() == '1'
@@ -588,7 +596,24 @@ class MultiGPUEigh(object):
     -------
     cuSolverMg only.  Falls back to ``RuntimeError`` if the system has
     no libcusolverMg.so or libcudart.so loadable.
+
+    Process-singleton handle
+    ------------------------
+    ``cusolverMgCreate`` allocates internal state that is NOT fully
+    released by ``cusolverMgDestroy`` in some CUDA 12.x builds (every
+    second instantiation in the same process fails with status 6
+    EXECUTION_FAILED).  We therefore cache the handle and the
+    device grid at class level — the first ``eigh()`` call creates them
+    and every subsequent call reuses them.  The per-call matrix
+    descriptor and device buffers are still allocated and freed each
+    time.
     """
+
+    # Class-level singletons.  Initialised lazily.
+    _shared_handle = None  # type: Optional[Any]
+    _shared_grid = None    # type: Optional[Any]
+    _shared_devs = None    # type: Optional[Tuple[int, ...]]
+    _peer_access_done = False
 
     def __init__(self,
             n_gpus: int,
@@ -720,27 +745,93 @@ class MultiGPUEigh(object):
                 sys.stderr.write('[MultiGPUEigh] ' + msg + '\n')
                 sys.stderr.flush()
 
-        # Create handle / grid / descriptor
-        _t('cusolverMgCreate')
-        h = _c_void_p(0)
-        _check_status(lib.cusolverMgCreate(_byref(h)), 'cusolverMgCreate')
-        self.handle = h
-        _t('cusolverMgDeviceSelect')
-        dev_arr_c = (_c_int * self.n_gpus)(*self.device_ids)
-        _check_status(
-            lib.cusolverMgDeviceSelect(h, _c_int(self.n_gpus), dev_arr_c),
-            'cusolverMgDeviceSelect')
+        # ------------------------------------------------------------------
+        # Reuse process-singleton handle + grid (see class docstring).
+        # ``cusolverMgCreate`` followed by ``cusolverMgDestroy`` leaves
+        # the next ``cusolverMgSyevd`` in status 6 (EXECUTION_FAILED) in
+        # CUDA 12.4; caching handle/grid keeps the internal cuBLAS
+        # bookkeeping consistent across calls.
+        # ------------------------------------------------------------------
+        cls = type(self)
+        devs_tuple = tuple(self.device_ids)
+        if (cls._shared_handle is None
+                or cls._shared_devs != devs_tuple):
+            # Destroy any prior cached handle/grid (different device list)
+            if cls._shared_grid is not None:
+                try:
+                    lib.cusolverMgDestroyGrid(cls._shared_grid)
+                except Exception:
+                    pass
+                cls._shared_grid = None
+            if cls._shared_handle is not None:
+                try:
+                    lib.cusolverMgDestroy(cls._shared_handle)
+                except Exception:
+                    pass
+                cls._shared_handle = None
+                cls._peer_access_done = False
 
-        _t('cusolverMgCreateDeviceGrid')
-        grid = _c_void_p(0)
-        dev_arr32 = (_c_int32 * self.n_gpus)(*self.device_ids)
-        _check_status(
-            lib.cusolverMgCreateDeviceGrid(
-                _byref(grid), _c_int32(1), _c_int32(self.n_gpus),
-                dev_arr32, _c_int(GRID_MAPPING_COL_MAJOR)),
-            'cusolverMgCreateDeviceGrid')
+            _t('cusolverMgCreate (cached)')
+            h = _c_void_p(0)
+            _check_status(lib.cusolverMgCreate(_byref(h)), 'cusolverMgCreate')
+            _t('cusolverMgDeviceSelect')
+            dev_arr_c = (_c_int * self.n_gpus)(*self.device_ids)
+            _check_status(
+                lib.cusolverMgDeviceSelect(h, _c_int(self.n_gpus), dev_arr_c),
+                'cusolverMgDeviceSelect')
+
+            # Enable peer access — only on first init for this device set.
+            # cusolverMgSyevd needs peer access for the distributed
+            # tridiagonal reduction stage; absence of peer access surfaces
+            # as a segfault inside the cuSolverMg internal copies.  We
+            # mirror the NVIDIA cusolver_MgSyevd_example1.cu pattern
+            # (enablePeerAccess).
+            if not cls._peer_access_done:
+                rt = self._rt
+                for src in self.device_ids:
+                    rt.cudaSetDevice(_c_int(src))
+                    for dst in self.device_ids:
+                        if src == dst:
+                            continue
+                        can = _c_int(0)
+                        _can_fn = getattr(rt, 'cudaDeviceCanAccessPeer', None)
+                        if _can_fn is None:
+                            continue
+                        _can_fn.argtypes = [_PTR(_c_int), _c_int, _c_int]
+                        _can_fn.restype = _c_int
+                        _can_fn(_byref(can), _c_int(src), _c_int(dst))
+                        if can.value:
+                            _en_fn = getattr(rt, 'cudaDeviceEnablePeerAccess', None)
+                            if _en_fn is None:
+                                continue
+                            _en_fn.argtypes = [_c_int, _c_int]
+                            _en_fn.restype = _c_int
+                            _en_fn(_c_int(dst), _c_int(0))
+                cls._peer_access_done = True
+
+            _t('cusolverMgCreateDeviceGrid')
+            grid = _c_void_p(0)
+            dev_arr32 = (_c_int32 * self.n_gpus)(*self.device_ids)
+            _check_status(
+                lib.cusolverMgCreateDeviceGrid(
+                    _byref(grid), _c_int32(1), _c_int32(self.n_gpus),
+                    dev_arr32, _c_int(GRID_MAPPING_COL_MAJOR)),
+                'cusolverMgCreateDeviceGrid')
+
+            cls._shared_handle = h
+            cls._shared_grid = grid
+            cls._shared_devs = devs_tuple
+            _t('handle/grid cached')
+        else:
+            _t('reuse cached handle/grid')
+
+        h = cls._shared_handle
+        grid = cls._shared_grid
+        # The instance keeps **references** so callers / close() don't try
+        # to destroy the shared singletons — close() now only frees the
+        # per-call matrix descriptor.
+        self.handle = h
         self.grid = grid
-        _t('grid OK')
 
         # Block-cyclic distribution params (mirror MultiGPULU)
         blk = int(os.environ.get('MNPBEM_VRAM_SHARE_BLK', '256'))
@@ -788,11 +879,26 @@ class MultiGPUEigh(object):
             'cusolverMgCreateMatrixDesc(A)')
         self.descr = descr
 
-        # W lives on device 0 (cusolverMgSyevd doc: W is single-device).
-        # Allocate (N,) on device 0.
-        _t('alloc W on device 0')
-        _cuda_set_device(self.device_ids[0])
-        ptr_W = _c_void_p(_cuda_malloc(N * w_itemsz))
+        # W (eigenvalues) is a HOST array.
+        #
+        # CRITICAL: cusolverMgSyevd expects ``W`` as a pointer to host
+        # memory, NOT device memory.  This is documented in the NVIDIA
+        # ``cusolver_MgSyevd_example1.cu`` sample where ``D`` is a
+        # ``std::vector<double>`` on host and ``D.data()`` is passed via
+        # ``reinterpret_cast<void*>``.  Passing a cudaMalloc-backed
+        # device pointer causes cuSolverMg to write into an unmapped
+        # host address during the back-transform stage, which surfaces
+        # as a segmentation fault.  v1.7.5 fix.
+        _t('alloc W on host')
+        W_host_buf = np.zeros(N, dtype=w_dt)
+        ptr_W = W_host_buf.ctypes.data_as(_c_void_p)
+
+        # Sync every participating device before bufferSize so the
+        # H2D scatter completes (mirrors NVIDIA sample cudaDeviceSynchronize
+        # after memcpyH2D).
+        for dev in self.device_ids:
+            _cuda_set_device(dev)
+            _cuda_device_sync()
 
         # Query workspace size
         _t('Syevd_bufferSize')
@@ -810,11 +916,21 @@ class MultiGPUEigh(object):
         work_lwork = int(lwork.value)
         _t('work_lwork={}'.format(work_lwork))
 
-        # Workspace per device
+        # Workspace per device — ``lwork`` is **number of elements** per
+        # device (matching the NVIDIA sample's ``sizeof(data_type) *
+        # lwork`` allocation).  Use the **compute** dtype itemsize, not
+        # the W (real) dtype, since the workspace stores complex
+        # off-diagonal and Householder tau elements for the complex
+        # path.
         ptrs_w = (_c_void_p * self.n_gpus)()
         for g, dev in enumerate(self.device_ids):
             _cuda_set_device(dev)
             ptrs_w[g] = _c_void_p(_cuda_malloc(max(1, work_lwork) * itemsz))
+
+        # Sync after workspace allocation
+        for dev in self.device_ids:
+            _cuda_set_device(dev)
+            _cuda_device_sync()
 
         # Run Syevd
         _t('Syevd call')
@@ -843,16 +959,16 @@ class MultiGPUEigh(object):
                     _cuda_free(int(ptrs_A[g] or 0))
                 except Exception:
                     pass
-            _cuda_set_device(self.device_ids[0])
-            _cuda_free(int(ptr_W.value or 0))
             raise RuntimeError(
                 '[error] cusolverMgSyevd reports info={}'.format(info.value))
-        _cuda_device_sync()
 
-        # Gather W from device 0
-        W_host = np.empty(N, dtype=w_dt)
-        _cuda_set_device(self.device_ids[0])
-        _cuda_memcpy_d2h(W_host, int(ptr_W.value or 0), N * w_itemsz)
+        # Sync after Syevd before reading W back / D2H copy
+        for dev in self.device_ids:
+            _cuda_set_device(dev)
+            _cuda_device_sync()
+
+        # W is already on host (we passed a host pointer to Syevd).
+        W_host = W_host_buf
 
         # Gather A (= eigenvectors V) back to host, block-cyclic.
         V_f = np.empty((N, N), dtype=dtype, order='F')
@@ -871,13 +987,13 @@ class MultiGPUEigh(object):
                 V_f[:, start:stop] = tile_full[:, local_offset:local_offset + ncols]
                 local_offset += blk
 
-        # Free intermediates
+        # Free intermediates — W lives in NumPy host memory now, so no
+        # cudaFree for it (will be reclaimed when ``W_host_buf`` is
+        # garbage-collected).
         for g, dev in enumerate(self.device_ids):
             _cuda_set_device(dev)
             _cuda_free(int(ptrs_w[g] or 0))
             _cuda_free(int(ptrs_A[g] or 0))
-        _cuda_set_device(self.device_ids[0])
-        _cuda_free(int(ptr_W.value or 0))
         return W_host, np.ascontiguousarray(V_f)
 
     def close(self) -> None:
@@ -888,18 +1004,43 @@ class MultiGPUEigh(object):
             except Exception:
                 pass
             self.descr = None
-        if self.grid is not None:
-            try:
-                lib.cusolverMgDestroyGrid(self.grid)
-            except Exception:
-                pass
-            self.grid = None
-        if self.handle is not None:
-            try:
-                lib.cusolverMgDestroy(self.handle)
-            except Exception:
-                pass
-            self.handle = None
+        # NOTE: ``self.grid`` and ``self.handle`` reference the class-level
+        # singleton entries — DO NOT destroy them on instance close, or
+        # the next ``eigh()`` call will run on an invalidated handle.
+        # The singletons are released only when the class explicitly
+        # invokes :meth:`shutdown_shared` at interpreter exit (best
+        # effort).
+        self.grid = None
+        self.handle = None
+
+    @classmethod
+    def shutdown_shared(cls) -> None:
+        """Destroy the cached cusolverMg handle / grid at interpreter exit.
+
+        Safe to call multiple times.  After this call the next
+        :meth:`eigh` will re-create fresh handle/grid.
+        """
+        try:
+            from . import multi_gpu_lu as _mg
+            lib = _mg._libcusolverMg
+            if lib is None:
+                return
+            if cls._shared_grid is not None:
+                try:
+                    lib.cusolverMgDestroyGrid(cls._shared_grid)
+                except Exception:
+                    pass
+                cls._shared_grid = None
+            if cls._shared_handle is not None:
+                try:
+                    lib.cusolverMgDestroy(cls._shared_handle)
+                except Exception:
+                    pass
+                cls._shared_handle = None
+            cls._shared_devs = None
+            cls._peer_access_done = False
+        except Exception:
+            pass
 
     def __del__(self) -> None:
         try:

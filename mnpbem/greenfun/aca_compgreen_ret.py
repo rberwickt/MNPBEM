@@ -121,6 +121,30 @@ class ACACompGreenRet(object):
         if cache_key in self._cache:
             return self._cache[cache_key]
 
+        # Multi-GPU memory hygiene: evict cached H-matrices for prior
+        # wavelengths so device memory does not grow without bound during
+        # a spectrum sweep.  BEMRetIter is single-wavelength at a time so
+        # we keep the current enei only.  Disable via
+        # ``MNPBEM_HMATRIX_MGPU_CACHE_KEEP=all`` if the caller wants the
+        # legacy "cache everything" behaviour.
+        if self._multi_gpu and os.environ.get(
+                'MNPBEM_HMATRIX_MGPU_CACHE_KEEP', '').strip() != 'all':
+            stale = [k for k in self._cache.keys()
+                    if isinstance(k, tuple) and len(k) == 4 and k[3] != enei]
+            for k in stale:
+                hmat_old = self._cache.pop(k, None)
+                if hmat_old is not None and hasattr(hmat_old, 'free_devices'):
+                    try:
+                        hmat_old.free_devices()
+                    except Exception:
+                        pass
+            # Also drop dense-mat cache for stale enei (host memory).
+            stale_dense = [k for k in self._cache.keys()
+                    if isinstance(k, tuple) and len(k) == 5
+                    and k[0] == 'dense' and k[4] != enei]
+            for k in stale_dense:
+                self._cache.pop(k, None)
+
         # Build evaluation function for the underlying Green function.
         # This function takes particle-ordered row/col indices and returns
         # the corresponding matrix values.
