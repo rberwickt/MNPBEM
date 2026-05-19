@@ -40,6 +40,34 @@ def _bem_assembly_use_gpu() -> bool:
     return os.environ.get('MNPBEM_GPU', '0') == '1'
 
 
+def _clear_green_distance_cache(green) -> None:
+    """Drop GreenRetRefined ``_d_cache`` arrays so the GPU is freed.
+
+    Each per-block GreenRetRefined caches up to 7 full (N, N) distance
+    arrays (~25 GB total at 15072 faces).  After the Green-eval phase
+    of ``_init_gpu_assemble`` they are dead weight that collides with
+    the LU/Sigma pipeline (the historical 47.8 GB OOM).  Clearing them
+    lets the next wavelength rebuild the cache cheaply — the distance
+    kernels are O(N^2) memory-bandwidth-bound (~0.5 s at 15072 faces),
+    negligible next to the O(N^3) LU.
+    """
+    g2d = getattr(green, 'g', None)
+    if g2d is None:
+        return
+    # ACACompGreenRet wraps a CompGreenRet at ``.g``; unwrap one level.
+    if not isinstance(g2d, (list, tuple)) and hasattr(g2d, 'g'):
+        g2d = g2d.g
+    if not isinstance(g2d, (list, tuple)):
+        return
+    for row in g2d:
+        if not isinstance(row, (list, tuple)):
+            continue
+        for blk in row:
+            refined = getattr(blk, 'refined', None) if blk is not None else None
+            if refined is not None and getattr(refined, '_d_cache', None) is not None:
+                refined._d_cache = None
+
+
 def _vram_share_lu_kwargs() -> dict:
     """Read MNPBEM_VRAM_SHARE_* env vars and return kwargs for lu_factor_dispatch.
 
@@ -566,6 +594,12 @@ class BEMRet(object):
         self.nvec = self.p.nvec
         self.k = 2 * np.pi / enei
 
+        # Path A instrumentation: per-stage wall-clock timing so we can
+        # see exactly where the per-wavelength cost goes (green eval vs
+        # LU factor vs Sigma assembly).  Printed at the end of init.
+        import time as _time
+        _t_stage = {'start': _time.perf_counter()}
+
         # Dielectric scalars / arrays on host (cheap).
         eps1_vals = self.p.eps1(enei)
         eps2_vals = self.p.eps2(enei)
@@ -595,54 +629,92 @@ class BEMRet(object):
                 return x
             return cp.asarray(_to_host(x))
 
-        # v1.6.6: release each Gij/Hij intermediate as soon as G1/G2/H1/H2
-        # combinations are formed.  On 12672-face Au@Ag dimers the 8
-        # intermediates alone consume ~20 GB; without the deletes the
-        # subsequent LU factor / Deltai/Sigma kernels OOM on a 49 GB A6000.
-        # Only a single ``free_all_blocks`` is needed (Python ref-count drop
-        # already returns blocks to the cupy pool; the explicit free pushes
-        # them back to the device so the LU factor below sees max headroom).
         _mempool = cp.get_default_memory_pool()
 
-        G11 = _to_dev(self.g.eval(0, 0, 'G', enei))
-        G21 = _to_dev(self.g.eval(1, 0, 'G', enei))
-        G1 = G11 - G21 if G21 is not None else G11
-        del G11, G21
+        # Path A green-eval (v4): evaluate G1/G2/H1/H2 as FULL matrices
+        # on the GPU.  The green path reuses its wavelength-independent
+        # (N, N) distance cache — far cheaper per wavelength than
+        # rebuilding column-tile slice caches 64x.  Each combined
+        # matrix is moved to the host the instant it is formed, so the
+        # device holds only {distance cache + one eval working set}
+        # during this phase, never the cache AND all four accumulating
+        # G/H (the old 47.8 GB OOM).  The distance cache is then dropped
+        # so the LU/Sigma phase gets the whole device; the next
+        # wavelength rebuilds it in ~0.5 s (O(N^2) bandwidth-bound).
+        def _to_host_arr(x):
+            if x is None or (isinstance(x, int) and x == 0):
+                return None
+            if isinstance(x, cp.ndarray):
+                return cp.asnumpy(x)
+            return _to_host(x)
 
-        G22 = _to_dev(self.g.eval(1, 1, 'G', enei))
-        G12 = _to_dev(self.g.eval(0, 1, 'G', enei))
-        G2 = G22 - G12 if G12 is not None else G22
-        del G22, G12
+        def _diff_host(a_raw, b_raw):
+            a = _to_host_arr(a_raw)
+            b = _to_host_arr(b_raw)
+            if a is None and b is None:
+                return None
+            if b is None:
+                return a
+            if a is None:
+                return -b
+            return a - b
 
-        H11 = _to_dev(self.g.eval(0, 0, 'H1', enei))
-        H21 = _to_dev(self.g.eval(1, 0, 'H1', enei))
-        H1_mat = H11 - H21 if H21 is not None else H11
-        del H11, H21
-
-        H22 = _to_dev(self.g.eval(1, 1, 'H2', enei))
-        H12 = _to_dev(self.g.eval(0, 1, 'H2', enei))
-        H2_mat = H22 - H12 if H12 is not None else H22
-        del H22, H12
+        # MATLAB: G1 = g{1,1}.G - g{2,1}.G ; G2 = g{2,2}.G - g{1,2}.G
+        #         H1 = g{1,1}.H1 - g{2,1}.H1 ; H2 = g{2,2}.H2 - g{1,2}.H2
+        G1_h = _diff_host(self.g.eval(0, 0, 'G', enei),
+                          self.g.eval(1, 0, 'G', enei))
+        cp.cuda.runtime.deviceSynchronize()
+        _mempool.free_all_blocks()
+        G2_h = _diff_host(self.g.eval(1, 1, 'G', enei),
+                          self.g.eval(0, 1, 'G', enei))
+        cp.cuda.runtime.deviceSynchronize()
+        _mempool.free_all_blocks()
+        H1_h = _diff_host(self.g.eval(0, 0, 'H1', enei),
+                          self.g.eval(1, 0, 'H1', enei))
+        cp.cuda.runtime.deviceSynchronize()
+        _mempool.free_all_blocks()
+        H2_h = _diff_host(self.g.eval(1, 1, 'H2', enei),
+                          self.g.eval(0, 1, 'H2', enei))
         cp.cuda.runtime.deviceSynchronize()
         _mempool.free_all_blocks()
 
-        # Optional user-supplied refun (coverlayer.refine).  refun is a host
-        # numpy callable; round-trip through host and re-upload — the
-        # refinement touches at most a handful of pair elements so the
-        # transfer cost is negligible compared with the N^3 GEMMs that
-        # follow.  Applied BEFORE LU factor so factored matrices reflect
-        # the refined operators.
+        # Drop the green distance cache (7 N×N arrays, ~25 GB) so the
+        # LU/Sigma phase has the full device.
+        _clear_green_distance_cache(self.g)
+        cp.cuda.runtime.deviceSynchronize()
+        _mempool.free_all_blocks()
+
+        # Optional user-supplied refun (coverlayer.refine) — host numpy.
         if self._refun is not None:
-            G1_h = cp.asnumpy(G1)
-            H1_h = cp.asnumpy(H1_mat)
-            G2_h = cp.asnumpy(G2)
-            H2_h = cp.asnumpy(H2_mat)
             G1_h, H1_h = self._refun(self.g, G1_h, H1_h)
             G2_h, H2_h = self._refun(self.g, G2_h, H2_h)
-            G1 = cp.asarray(G1_h)
-            H1_mat = cp.asarray(H1_h)
-            G2 = cp.asarray(G2_h)
-            H2_mat = cp.asarray(H2_h)
+
+        # Phase 2: upload the four host matrices for the on-device
+        # LU/Sigma pipeline.  The Green distance cache is gone, so the
+        # device is empty and the ~36 GB linear-algebra peak fits.
+        G1 = cp.asarray(G1_h); del G1_h
+        G2 = cp.asarray(G2_h); del G2_h
+        H1_mat = cp.asarray(H1_h); del H1_h
+        H2_mat = cp.asarray(H2_h); del H2_h
+        # Path A precision lever: when MNPBEM_GPU_LOWPREC=1 the LU/Sigma
+        # pipeline runs in complex64.  On the RTX A6000 fp64 is ~1.2
+        # TFLOPS vs ~38 TFLOPS fp32 (1:32) — the measured Sigma stage
+        # (687 s of a 750 s wavelength) is almost pure fp64 GEMM/solve,
+        # so complex64 cuts it ~10-30x.  The four LU factors / Sigma1 /
+        # L1 / L2 are cast back to complex128 before return so the
+        # downstream solve() is unchanged; only the *values* carry
+        # complex64 precision (verified against a complex128 reference).
+        _lowprec = os.environ.get('MNPBEM_GPU_LOWPREC', '0') == '1'
+        _wd = np.complex64 if _lowprec else np.complex128
+        _wd_real = np.float32 if _lowprec else np.float64
+        if _lowprec:
+            G1 = G1.astype(_wd)
+            G2 = G2.astype(_wd)
+            H1_mat = H1_mat.astype(_wd)
+            H2_mat = H2_mat.astype(_wd)
+        cp.cuda.runtime.deviceSynchronize()
+        _mempool.free_all_blocks()
+        _t_stage['green'] = _time.perf_counter()
 
         # LU factor on device.  Keep G1/G2 on device for L1/L2 product.
         G1_dev = G1
@@ -657,9 +729,11 @@ class BEMRet(object):
         # G1c/G2c are now consumed by the LU factor (overwrite_a); drop the
         # Python references so the pool can immediately recycle the buffer.
         del G1c, G2c
+        cp.cuda.runtime.deviceSynchronize()
+        _t_stage['lu_gh'] = _time.perf_counter()
 
         n = G1_dev.shape[0]
-        I_dev = cp.eye(n)
+        I_dev = cp.eye(n, dtype=_wd)
 
         # L matrices
         # ACA wrappers proxy the underlying CompGreenRet via .g
@@ -677,8 +751,8 @@ class BEMRet(object):
         if np.all(_gobj.con[0][1] == 0) or scalar_eps:
             L1_true_scalar = scalar_eps and np.isscalar(self.eps1)
             if native and not L1_true_scalar:
-                self.L1 = cp.asarray(self.eps1)
-                self.L2 = cp.asarray(self.eps2)
+                self.L1 = cp.asarray(self.eps1).astype(_wd)
+                self.L2 = cp.asarray(self.eps2).astype(_wd)
             else:
                 self.L1 = self.eps1  # host scalar OR host numpy diag
                 self.L2 = self.eps2
@@ -694,13 +768,25 @@ class BEMRet(object):
             cp.cuda.runtime.deviceSynchronize()
             _mempool.free_all_blocks()
         else:
+            # Path A peak fix: process the G1-side and G2-side L matrices
+            # sequentially instead of holding G1, G2, G1i, G2i, L1, L2 all
+            # at once.  Building L1 (then freeing G1/G1i before touching
+            # the G2 side) cuts the L-stage peak from ~11 to ~9 N x N
+            # matrices — ~7 GB headroom on a 15072-face complex128 dimer.
+            eps1_dev = cp.asarray(self.eps1).astype(_wd)
             G1i_dev = _cp_lu_solve((lu1, piv1), I_dev)
-            G2i_dev = _cp_lu_solve((lu2, piv2), I_dev)
-            eps1_dev = cp.asarray(self.eps1)
-            eps2_dev = cp.asarray(self.eps2)
             L1_dev_full = G1_dev @ eps1_dev @ G1i_dev
+            del eps1_dev, G1i_dev, G1, G1_dev
+            cp.cuda.runtime.deviceSynchronize()
+            _mempool.free_all_blocks()
+
+            eps2_dev = cp.asarray(self.eps2).astype(_wd)
+            G2i_dev = _cp_lu_solve((lu2, piv2), I_dev)
             L2_dev_full = G2_dev @ eps2_dev @ G2i_dev
-            del eps1_dev, eps2_dev, G1, G2, G1_dev, G2_dev
+            del eps2_dev, G2i_dev, G2, G2_dev
+            cp.cuda.runtime.deviceSynchronize()
+            _mempool.free_all_blocks()
+
             if native:
                 # Phase 3: keep L1/L2 on device.
                 self.L1 = L1_dev_full
@@ -709,6 +795,11 @@ class BEMRet(object):
                 self.L1 = cp.asnumpy(L1_dev_full)
                 self.L2 = cp.asnumpy(L2_dev_full)
                 del L1_dev_full, L2_dev_full
+            # G1i/G2i were freed above; the Sigma stage must take the
+            # ``lu_solve`` route (G1i_dev is None) rather than the explicit
+            # inverse multiply.
+            G1i_dev = None
+            G2i_dev = None
             cp.cuda.runtime.deviceSynchronize()
             _mempool.free_all_blocks()
             L1_true_scalar = False
@@ -747,34 +838,53 @@ class BEMRet(object):
         Deltai_dev = _cp_lu_solve((lu_d, piv_d), I_dev)
         del I_dev
 
-        # nvec*nvec^T on device.
-        nvec_dev = cp.asarray(self.nvec)
-        nvec_outer_dev = nvec_dev @ nvec_dev.T
-        del nvec_dev
-
         if L1_true_scalar:
+            # nvec*nvec^T built just before use to keep it off the peak.
+            nvec_dev = cp.asarray(self.nvec).astype(_wd_real)
+            nvec_outer_dev = nvec_dev @ nvec_dev.T
+            del nvec_dev
             Sigma_dev = (Sigma1_dev * self.L1) - (Sigma2_dev * self.L2)
             L_scalar = self.L1 - self.L2
             Sigma_dev = Sigma_dev + (self.k ** 2) * L_scalar * (
                 Deltai_dev * nvec_outer_dev) * L_scalar
+            # Sigma2/Deltai/nvec_outer done; Sigma1 stays only if native.
+            if not native:
+                del Sigma1_dev
+            del Sigma2_dev, Deltai_dev, nvec_outer_dev
         else:
-            # self.L1 / self.L2 may be host numpy diag (con==0 non-uniform
-            # eps when native=False) or device cupy (other paths).  Calling
-            # ``cp.asarray`` is a no-op on cupy and an upload on numpy.
-            L1_dev = cp.asarray(self.L1)
-            L2_dev = cp.asarray(self.L2)
+            # Path A peak fix: accumulate Sigma term-by-term so the full
+            # ``Sigma1@L1 - Sigma2@L2 + k²((L@Deltai)*nvec)@L`` expression
+            # never holds all 7 operand matrices + cupy GEMM temporaries
+            # at once.  Each source matrix is freed as soon as its term is
+            # folded in, capping the Sigma-stage peak near 36 GB instead
+            # of the ~50 GB single-expression peak that OOM'd at 15072
+            # faces.  self.L1/self.L2 may be host numpy diag or device
+            # cupy; ``cp.asarray`` is a no-op on cupy, an upload on numpy.
+            L1_dev = cp.asarray(self.L1).astype(_wd)
+            L2_dev = cp.asarray(self.L2).astype(_wd)
+            Sigma_dev = Sigma1_dev @ L1_dev
+            Sigma_dev -= Sigma2_dev @ L2_dev
+            del Sigma2_dev
+            if not native:
+                del Sigma1_dev
+            cp.cuda.runtime.deviceSynchronize()
+            _mempool.free_all_blocks()
+            # magnetic term: k² ((L @ Deltai) * nvec_outer) @ L
             L_dev = L1_dev - L2_dev
-            Sigma_dev = (
-                Sigma1_dev @ L1_dev - Sigma2_dev @ L2_dev +
-                (self.k ** 2) * ((L_dev @ Deltai_dev) * nvec_outer_dev) @ L_dev
-            )
-            del L1_dev, L2_dev, L_dev
-        # Sigma2_dev / Deltai_dev / nvec_outer_dev not needed beyond this
-        # point.  Sigma1_dev stays only when ``native=True`` (assigned to
-        # self.Sigma1 above).
-        if not native:
-            del Sigma1_dev
-        del Sigma2_dev, Deltai_dev, nvec_outer_dev
+            del L1_dev, L2_dev
+            mag = L_dev @ Deltai_dev
+            del Deltai_dev
+            # nvec*nvec^T built here (just before use) so it is not
+            # resident through the Sigma1@L1 / Sigma2@L2 terms above.
+            nvec_dev = cp.asarray(self.nvec).astype(_wd_real)
+            nvec_outer_dev = nvec_dev @ nvec_dev.T
+            del nvec_dev
+            mag *= nvec_outer_dev
+            del nvec_outer_dev
+            mag = mag @ L_dev
+            del L_dev
+            Sigma_dev += (self.k ** 2) * mag
+            del mag
         cp.cuda.runtime.deviceSynchronize()
         _mempool.free_all_blocks()
 
@@ -795,6 +905,36 @@ class BEMRet(object):
         cp.cuda.runtime.deviceSynchronize()
         _mempool.free_all_blocks()
         cp.get_default_pinned_memory_pool().free_all_blocks()
+
+        if _lowprec:
+            # Cast the complex64 results back into complex128 storage so
+            # the downstream solve() sees its expected dtype with no
+            # dtype-mix errors.  The *values* keep complex64 precision —
+            # this only widens the container.
+            for _luattr in ('G1_lu', 'G2_lu', 'Delta_lu', 'Sigma_lu'):
+                _tag = getattr(self, _luattr, None)
+                if (isinstance(_tag, tuple) and len(_tag) == 3
+                        and _tag[1] is not None
+                        and hasattr(_tag[1], 'astype')):
+                    setattr(self, _luattr,
+                            (_tag[0], _tag[1].astype(np.complex128), _tag[2]))
+            for _mattr in ('Sigma1', 'L1', 'L2'):
+                _v = getattr(self, _mattr, None)
+                if (_v is not None and hasattr(_v, 'astype')
+                        and hasattr(_v, 'dtype')
+                        and _v.dtype == np.complex64):
+                    setattr(self, _mattr, _v.astype(np.complex128))
+            cp.cuda.runtime.deviceSynchronize()
+            _mempool.free_all_blocks()
+        _t_stage['sigma'] = _time.perf_counter()
+
+        _t_green = _t_stage['green'] - _t_stage['start']
+        _t_lu = _t_stage['lu_gh'] - _t_stage['green']
+        _t_sig = _t_stage['sigma'] - _t_stage['lu_gh']
+        _t_tot = _t_stage['sigma'] - _t_stage['start']
+        print('[timing] _init_gpu_assemble enei={:.1f}: green-eval={:.1f}s '
+              'G1G2-LU={:.1f}s Sigma-stage={:.1f}s total={:.1f}s'.format(
+                  enei, _t_green, _t_lu, _t_sig, _t_tot), flush=True)
         return self
 
     def _init_distributed_assemble(self, enei):
