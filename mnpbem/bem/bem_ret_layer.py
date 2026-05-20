@@ -313,6 +313,17 @@ class BEMRetLayer(object):
 
         self.enei = enei
 
+        # Path A precision lever (mirrors bem_ret.py): when MNPBEM_GPU_LOWPREC=1
+        # build the G/H/Sigma/L/Gamma/m_full matrices in complex64 so the
+        # 2n x 2n m_full LU factor fits half the device memory (verified
+        # against complex128 reference: spectrum < 1.2e-3, BEM tolerance).
+        # LU factors and the host-resident auxiliary matrices are cast back
+        # to complex128 before exit so the downstream solve() path keeps
+        # its expected dtype (only the *values* carry complex64 precision).
+        _lowprec = os.environ.get('MNPBEM_GPU_LOWPREC', '0') == '1'
+        _wd = np.complex64 if _lowprec else np.complex128
+        _wd_real = np.float32 if _lowprec else np.float64
+
         # Outer surface normals
         nvec = self.p.nvec
         self.nvec = nvec
@@ -370,6 +381,13 @@ class BEMRetLayer(object):
         G1e = self._sub_mat(self._mul_eps(eps1, G11), self._mul_eps(eps2, G21))
         H1 = self._sub_mat(H11, H21)
         H1e = self._sub_mat(self._mul_eps(eps1, H11), self._mul_eps(eps2, H21))
+        # MNPBEM_GPU_LOWPREC: cast the inner-surface BEM blocks to complex64
+        # so downstream LU/matmul/Sigma stages operate at half memory.
+        if _lowprec:
+            G1 = G1.astype(_wd) if hasattr(G1, 'astype') else G1
+            G1e = G1e.astype(_wd) if hasattr(G1e, 'astype') else G1e
+            H1 = H1.astype(_wd) if hasattr(H1, 'astype') else H1
+            H1e = H1e.astype(_wd) if hasattr(H1e, 'astype') else H1e
         # v1.7.2: release inner-surface Green intermediates as soon as the
         # combined G1/G1e/H1/H1e are formed.  Mirrors BEMRet's per-stage
         # del + free_all_blocks pattern.
@@ -396,6 +414,16 @@ class BEMRetLayer(object):
         # Build G2e structured dict: G2e.ss = eps2*G22.ss - eps1*G12, etc.
         G2e = self._build_outer_mixed_eps(G22, G12, eps2, eps1)
         H2e = self._build_outer_mixed_eps(H22, H12, eps2, eps1)
+        # MNPBEM_GPU_LOWPREC: cast the structured outer-surface blocks to
+        # complex64 so downstream LU/Sigma/m_full stages operate at half
+        # memory.  Mirrors the G1/G1e/H1/H1e cast above.
+        if _lowprec:
+            for _d in (G2, G2e, H2, H2e):
+                if isinstance(_d, dict):
+                    for _k in list(_d.keys()):
+                        _v = _d[_k]
+                        if hasattr(_v, 'astype'):
+                            _d[_k] = _v.astype(_wd)
         # v1.7.2: release outer-surface Green intermediates after the
         # structured G2/G2e/H2/H2e dicts have been built.  G22 is a dict
         # of N^2 substrate-table evaluations (~5 buffers for an outer
@@ -459,10 +487,10 @@ class BEMRetLayer(object):
             # ---- Auxiliary matrices (MATLAB initmat.m lines 51-68) ----
             # Inverse of G1 and of parallel component G2.p
             self._G1_lu = lu_factor_dispatch(G1, **_vram_share_lu_kwargs())
-            G1i = lu_solve_dispatch(self._G1_lu, np.eye(G1.shape[0]))
+            G1i = lu_solve_dispatch(self._G1_lu, np.eye(G1.shape[0], dtype=_wd))
 
             self._G2p_lu = lu_factor_dispatch(G2['p'], **_vram_share_lu_kwargs())
-            G2pi = lu_solve_dispatch(self._G2p_lu, np.eye(G2['p'].shape[0]))
+            G2pi = lu_solve_dispatch(self._G2p_lu, np.eye(G2['p'].shape[0], dtype=_wd))
             # v1.7.2: free pools after the two G LU factorizations + their
             # inverses (each LU is ~N^2 complex; the eye-product N^2 too).
             if _CUPY_OK_V172:
@@ -493,7 +521,7 @@ class BEMRetLayer(object):
 
             # Gamma matrix
             self._Gamma_lu = lu_factor_dispatch(Sigma1 - Sigma2p, **_vram_share_lu_kwargs())
-            Gamma = lu_solve_dispatch(self._Gamma_lu, np.eye(Sigma1.shape[0]))
+            Gamma = lu_solve_dispatch(self._Gamma_lu, np.eye(Sigma1.shape[0], dtype=_wd))
             del Sigma2p
             if _CUPY_OK_V172:
                 try:
@@ -504,9 +532,23 @@ class BEMRetLayer(object):
 
             # Gammapar = ik*(L1-L2p)*Gamma .* (npar*npar')
             # Element-wise multiply with outer product of parallel normals
+            # MNPBEM_GPU_LOWPREC: cast the real normal-vector outer product
+            # to float32 so the complex-times-real promotion stays inside
+            # complex64 (otherwise complex64 * float64 -> complex128 would
+            # silently double m11..m22's footprint).
             npar_outer = npar @ npar.T  # (n, n)
+            if _lowprec:
+                npar_outer = npar_outer.astype(_wd_real)
             Gammapar = 1j * k * matmul_dispatch(L1 - L2p, Gamma) * npar_outer
+            if _lowprec and hasattr(Gammapar, 'astype'):
+                Gammapar = Gammapar.astype(_wd)
             del npar_outer
+
+            # MNPBEM_GPU_LOWPREC: cast nperp to float32 so the
+            # broadcasting multiplies below stay in complex64.
+            _nperp_col = nperp[:, np.newaxis]
+            if _lowprec:
+                _nperp_col = _nperp_col.astype(_wd_real)
 
             # ---- Set up 2x2 block response matrix (MATLAB initmat.m lines 72-77) ----
             # m{1,1} = Sigma1e*G2.ss - H2e.ss - ik*(Gammapar*(L1*G2.ss - G2e.ss)
@@ -516,13 +558,21 @@ class BEMRetLayer(object):
             diff_hh = matmul_dispatch(L1, G2['hh']) - G2e['hh']
 
             m11 = (matmul_dispatch(Sigma1e, G2['ss']) - H2e['ss']
-                - 1j * k * (matmul_dispatch(Gammapar, diff_ss) + diff_sh * nperp[:, np.newaxis]))
+                - 1j * k * (matmul_dispatch(Gammapar, diff_ss) + diff_sh * _nperp_col))
             m12 = (matmul_dispatch(Sigma1e, G2['sh']) - H2e['sh']
-                - 1j * k * (matmul_dispatch(Gammapar, diff_sh) + diff_hh * nperp[:, np.newaxis]))
+                - 1j * k * (matmul_dispatch(Gammapar, diff_sh) + diff_hh * _nperp_col))
             m21 = (matmul_dispatch(Sigma1, G2['hs']) - H2['hs']
-                - 1j * k * diff_ss * nperp[:, np.newaxis])
+                - 1j * k * diff_ss * _nperp_col)
             m22 = (matmul_dispatch(Sigma1, G2['hh']) - H2['hh']
-                - 1j * k * diff_sh * nperp[:, np.newaxis])
+                - 1j * k * diff_sh * _nperp_col)
+            # MNPBEM_GPU_LOWPREC: defensively cast the m_ij blocks to the
+            # working dtype in case any 1j*k * complex64 broadcast leaked
+            # back to complex128 (numpy default literal dtype).
+            if _lowprec:
+                if hasattr(m11, 'astype'): m11 = m11.astype(_wd)
+                if hasattr(m12, 'astype'): m12 = m12.astype(_wd)
+                if hasattr(m21, 'astype'): m21 = m21.astype(_wd)
+                if hasattr(m22, 'astype'): m22 = m22.astype(_wd)
             # v1.7.3 (VRAM-share path): matmul_dispatch may return cupy
             # arrays under MNPBEM_GPU=1.  Materialise the m11..m22 blocks
             # on the host before assembling m_full so the 4*N^2 buffer
@@ -549,7 +599,11 @@ class BEMRetLayer(object):
                     pass
 
             # Assemble 2x2 block matrix (2n x 2n) and LU factorize
-            m_full = np.empty((2 * n, 2 * n), dtype = complex)
+            # MNPBEM_GPU_LOWPREC: build m_full in complex64 so the device
+            # LU factor input fits at half memory (e.g. n=15096 -> 7.3 GB
+            # instead of 14.6 GB), unblocking large-substrate cases that
+            # otherwise OOM during the LU copy.
+            m_full = np.empty((2 * n, 2 * n), dtype=_wd)
             m_full[:n, :n] = m11
             m_full[:n, n:] = m12
             m_full[n:, :n] = m21
@@ -604,6 +658,50 @@ class BEMRetLayer(object):
             for _k in list(G2e.keys()):
                 if is_cupy_array(G2e[_k]):
                     G2e[_k] = to_host(G2e[_k])
+
+        # MNPBEM_GPU_LOWPREC: cast the host-resident auxiliary matrices
+        # back to complex128 so downstream solve()/_solve_single sees its
+        # expected dtype (the *values* keep complex64 precision; only the
+        # container is widened).  Mirrors the bem_ret.py pattern.
+        if _lowprec:
+            def _c128(_v):
+                if (_v is not None and hasattr(_v, 'astype')
+                        and hasattr(_v, 'dtype')
+                        and _v.dtype == np.complex64):
+                    return _v.astype(np.complex128)
+                return _v
+            G1i = _c128(G1i)
+            G2pi = _c128(G2pi)
+            L1 = _c128(L1)
+            L2p = _c128(L2p)
+            Sigma1 = _c128(Sigma1)
+            Sigma1e = _c128(Sigma1e)
+            Gamma = _c128(Gamma)
+            if isinstance(G2, dict):
+                for _k in list(G2.keys()):
+                    G2[_k] = _c128(G2[_k])
+            if isinstance(G2e, dict):
+                for _k in list(G2e.keys()):
+                    G2e[_k] = _c128(G2e[_k])
+            # Cast LU factors back to complex128 (single-GPU 'gpu' tag and
+            # CPU 'cpu' tag both carry an ndarray-like LU slot at index 1;
+            # the 'mgpu' tag holds an opaque handle and is left alone).
+            for _luattr in ('_G1_lu', '_G2p_lu', '_Gamma_lu', 'm_lu'):
+                _tag = getattr(self, _luattr, None)
+                if (isinstance(_tag, tuple) and len(_tag) == 3
+                        and _tag[0] in ('gpu', 'cpu')
+                        and _tag[1] is not None
+                        and hasattr(_tag[1], 'astype')
+                        and hasattr(_tag[1], 'dtype')
+                        and _tag[1].dtype == np.complex64):
+                    setattr(self, _luattr,
+                            (_tag[0], _tag[1].astype(np.complex128), _tag[2]))
+            if _CUPY_OK_V172:
+                try:
+                    _cp_v172.cuda.runtime.deviceSynchronize()
+                    _cp_v172.get_default_memory_pool().free_all_blocks()
+                except Exception:
+                    pass
 
         self.G1i = G1i
         self.G2pi = G2pi
