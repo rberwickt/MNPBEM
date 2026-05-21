@@ -105,50 +105,101 @@ def _assemble_m_blocks_resident(
                 ad = ad.astype(cp.complex64)
             return ad
 
-        L1g = up(L1); L2pg = up(L2p)
-        S1g = up(Sigma1); S1eg = up(Sigma1e); Gg = up(Gamma)
-        ss = up(G2['ss']); sh = up(G2['sh']); hh = up(G2['hh']); hs = up(G2['hs'])
-        ess = up(G2e['ss']); esh = up(G2e['sh']); ehh = up(G2e['hh'])
-        h2hs = up(H2['hs']); h2hh = up(H2['hh'])
-        h2ess = up(H2e['ss']); h2esh = up(H2e['sh'])
+        # v1.7.5 large-mesh OOM fix: the previous form uploaded all ~16
+        # (n, n) operands simultaneously before the first GEMM.  At
+        # n=15072 / complex64 that is ~16 x 1.8 GB = 29 GB of inputs plus
+        # npar_outer + Gammapar + three diff_* + four m_ij intermediates
+        # (~21 GB) = ~50 GB peak, which overflows a 48 GB device.  cupy then
+        # raised OutOfMemoryError, the broad ``except`` returned None, and
+        # the build silently fell back to the host (CPU) GEMM path —
+        # turning a ~25 s GPU assemble into a ~630 s CPU assemble (the
+        # dominant share of the 20 min/wl the user observed at 15072 face).
+        #
+        # Fix: keep only the operands needed for the current sub-result
+        # resident, download each m_ij block as soon as it is formed, and
+        # free its device buffers before building the next one.  L1g and
+        # Gammapar (reused across blocks) stay resident; everything else is
+        # uploaded lazily.  Device peak now ~15-18 GB at n=15072, so the
+        # GPU path stays engaged.  Numerically identical to the previous
+        # all-resident form (same operations, same order).
+        def _free():
+            cp.cuda.runtime.deviceSynchronize()
+            cp.get_default_memory_pool().free_all_blocks()
 
+        nperp_col = cp.asarray(nperp)[:, None]
+        if lowprec:
+            nperp_col = nperp_col.astype(cp.dtype(wd_real))
+
+        L1g = up(L1)
+
+        # Gammapar = ik * (L1 - L2p) @ Gamma .* (npar @ npar')
+        L2pg = up(L2p); Gg = up(Gamma)
         npar_outer = cp.asarray(npar) @ cp.asarray(npar).T
         if lowprec:
             npar_outer = npar_outer.astype(cp.dtype(wd_real))
         Gammapar = 1j * k * (L1g - L2pg) @ Gg * npar_outer
         if lowprec:
             Gammapar = Gammapar.astype(cp.dtype(wd))
-        del npar_outer
+        del L2pg, Gg, npar_outer
+        _free()
 
-        nperp_col = cp.asarray(nperp)[:, None]
-        if lowprec:
-            nperp_col = nperp_col.astype(cp.dtype(wd_real))
-
+        # diff_ss / diff_sh are reused by several blocks; diff_hh only by m12.
+        ss = up(G2['ss']); ess = up(G2e['ss'])
         diff_ss = L1g @ ss - ess
+        del ess
+        sh = up(G2['sh']); esh = up(G2e['sh'])
         diff_sh = L1g @ sh - esh
-        diff_hh = L1g @ hh - ehh
+        del esh
 
+        S1eg = up(Sigma1e)
+        # m11 = Sigma1e@ss - H2e.ss - ik*(Gammapar@diff_ss + diff_sh*nperp)
+        h2ess = up(H2e['ss'])
         m11 = (S1eg @ ss - h2ess
                - 1j * k * (Gammapar @ diff_ss + diff_sh * nperp_col))
+        if lowprec:
+            m11 = m11.astype(cp.dtype(wd))
+        m11_h = cp.asnumpy(m11)
+        del ss, h2ess, m11
+        _free()
+
+        # m12 = Sigma1e@sh - H2e.sh - ik*(Gammapar@diff_sh + diff_hh*nperp)
+        hh = up(G2['hh']); ehh = up(G2e['hh'])
+        diff_hh = L1g @ hh - ehh
+        del ehh
+        h2esh = up(H2e['sh'])
         m12 = (S1eg @ sh - h2esh
                - 1j * k * (Gammapar @ diff_sh + diff_hh * nperp_col))
-        m21 = (S1g @ hs - h2hs
-               - 1j * k * diff_ss * nperp_col)
-        m22 = (S1g @ hh - h2hh
-               - 1j * k * diff_sh * nperp_col)
         if lowprec:
-            m11 = m11.astype(cp.dtype(wd)); m12 = m12.astype(cp.dtype(wd))
-            m21 = m21.astype(cp.dtype(wd)); m22 = m22.astype(cp.dtype(wd))
+            m12 = m12.astype(cp.dtype(wd))
+        m12_h = cp.asnumpy(m12)
+        del sh, h2esh, S1eg, diff_hh, Gammapar, m12
+        _free()
 
-        out = (cp.asnumpy(m11), cp.asnumpy(m12),
-               cp.asnumpy(m21), cp.asnumpy(m22))
-        del (L1g, L2pg, S1g, S1eg, Gg, ss, sh, hh, hs, ess, esh, ehh,
-             h2hs, h2hh, h2ess, h2esh, Gammapar, diff_ss, diff_sh, diff_hh,
-             m11, m12, m21, m22, nperp_col)
-        cp.cuda.runtime.deviceSynchronize()
-        cp.get_default_memory_pool().free_all_blocks()
-        return out
-    except Exception:
+        S1g = up(Sigma1)
+        # m21 = Sigma1@hs - H2.hs - ik*diff_ss*nperp
+        hs = up(G2['hs']); h2hs = up(H2['hs'])
+        m21 = (S1g @ hs - h2hs - 1j * k * diff_ss * nperp_col)
+        if lowprec:
+            m21 = m21.astype(cp.dtype(wd))
+        m21_h = cp.asnumpy(m21)
+        del hs, h2hs, diff_ss, m21
+        _free()
+
+        # m22 = Sigma1@hh - H2.hh - ik*diff_sh*nperp
+        h2hh = up(H2['hh'])
+        m22 = (S1g @ hh - h2hh - 1j * k * diff_sh * nperp_col)
+        if lowprec:
+            m22 = m22.astype(cp.dtype(wd))
+        m22_h = cp.asnumpy(m22)
+        del hh, h2hh, S1g, diff_sh, m22, L1g, nperp_col
+        _free()
+
+        if _init_profile_enabled():
+            print('[assemble-prof] resident GPU path OK (streamed)', flush=True)
+        return (m11_h, m12_h, m21_h, m22_h)
+    except Exception as _exc:
+        if _init_profile_enabled():
+            print('[assemble-prof] resident path FAILED -> host fallback: {!r}'.format(_exc), flush=True)
         try:
             cp.get_default_memory_pool().free_all_blocks()
         except Exception:
@@ -916,6 +967,28 @@ class BEMRetLayer(object):
             return 0
         if np.isscalar(eps):
             return _to_host_safe(eps * M)
+        # ``eps`` is only ever constructed as a diagonal matrix
+        # (np.diag(eps_vals)) in init() for the per-face varying-eps case
+        # (e.g. Au@Ag dimer where the dielectric differs per particle).
+        # ``eps @ M`` therefore performs a full O(n^3) GEMM that is
+        # mathematically identical to a row-scaling by the diagonal — which
+        # is O(n^2).  Extract the diagonal once (O(n)) and broadcast-multiply
+        # instead.  On a 15072-face dimer this removes ~20 dense n^3 GEMMs
+        # per wavelength (each ~35s on host / ~1.5s on GPU) from the
+        # green-eval / matrix-assemble stages.
+        if hasattr(eps, 'ndim') and eps.ndim == 2:
+            xp = np
+            if _is_cupy_array(eps) or _is_cupy_array(M):
+                import cupy as _cp_local
+                xp = _cp_local
+                eps, M = _backend_align(eps, M)
+            eps_diag = xp.diagonal(eps).reshape(-1, 1)
+            if M.ndim == 2:
+                result = eps_diag * M
+            else:
+                # (n, 3, ncol) or similar — scale along the leading axis.
+                result = eps_diag.reshape((-1,) + (1,) * (M.ndim - 1)) * M
+            return _to_host_safe(result)
         eps, M = _backend_align(eps, M)
         result = eps @ M
         return _to_host_safe(result)
