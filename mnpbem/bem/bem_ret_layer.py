@@ -1,5 +1,6 @@
 import os
 import sys
+import time as _time
 
 from typing import List, Dict, Tuple, Optional, Union, Any, Callable
 
@@ -182,6 +183,10 @@ def _assemble_m_blocks_resident(
         if lowprec:
             m21 = m21.astype(cp.dtype(wd))
         m21_h = cp.asnumpy(m21)
+        # v1.7.6: download diff_ss before freeing -- the solve path needs it
+        # (constant per wavelength) and recomputing it as a c128 host GEMM in
+        # _solve_single costs ~55s/polarisation on a 15072-face dimer.
+        diff_ss_h = cp.asnumpy(diff_ss)
         del hs, h2hs, diff_ss, m21
         _free()
 
@@ -191,12 +196,13 @@ def _assemble_m_blocks_resident(
         if lowprec:
             m22 = m22.astype(cp.dtype(wd))
         m22_h = cp.asnumpy(m22)
+        diff_sh_h = cp.asnumpy(diff_sh)
         del hh, h2hh, S1g, diff_sh, m22, L1g, nperp_col
         _free()
 
         if _init_profile_enabled():
             print('[assemble-prof] resident GPU path OK (streamed)', flush=True)
-        return (m11_h, m12_h, m21_h, m22_h)
+        return (m11_h, m12_h, m21_h, m22_h, diff_ss_h, diff_sh_h)
     except Exception as _exc:
         if _init_profile_enabled():
             print('[assemble-prof] resident path FAILED -> host fallback: {!r}'.format(_exc), flush=True)
@@ -445,7 +451,9 @@ class BEMRetLayer(object):
         for _attr in ('_G1_lu', '_G2p_lu', '_Gamma_lu', 'm_lu',
                       'G1i', 'G2pi', 'G2', 'G2e',
                       'L1', 'L2p', 'Sigma1', 'Sigma1e', 'Gamma',
-                      'm_full'):
+                      'm_full',
+                      '_sv_diff_ss', '_sv_diff_sh', '_sv_G2piGamma',
+                      '_sv_L1mL2p_Gamma'):
             if hasattr(self, _attr):
                 setattr(self, _attr, None)
         # v1.7.4: also drop the reflected-Green per-component dicts that
@@ -750,8 +758,13 @@ class BEMRetLayer(object):
             if _lowprec:
                 _nperp_col = _nperp_col.astype(_wd_real)
 
+            # v1.7.6: capture diff_ss/diff_sh host copies emitted by the
+            # resident assemble so the solve path can reuse them without a
+            # second c128 GEMM.  ``None`` when the host fallback path runs.
+            _sv_diff_ss_cap = None
+            _sv_diff_sh_cap = None
             if _m_blocks is not None:
-                m11, m12, m21, m22 = _m_blocks
+                m11, m12, m21, m22, _sv_diff_ss_cap, _sv_diff_sh_cap = _m_blocks
                 del _m_blocks
                 diff_ss = diff_sh = diff_hh = None  # consumed on device
                 Gammapar = None                     # recomputed inside helper
@@ -873,6 +886,43 @@ class BEMRetLayer(object):
             for _k in list(G2e.keys()):
                 if is_cupy_array(G2e[_k]):
                     G2e[_k] = to_host(G2e[_k])
+
+        # v1.7.6 solve-side recomputation fix: ``_solve_single`` (called once
+        # per polarisation) recomputed several constant (n,n)@(n,n) GEMMs that
+        # depend only on the BEM matrices, not on the excitation RHS:
+        #     diff_ss     = L1 @ G2.ss - G2e.ss
+        #     diff_sh     = L1 @ G2.sh - G2e.sh
+        #     G2piGamma   = G2pi @ Gamma
+        #     L1mL2pGamma = (L1 - L2p) @ Gamma
+        # On a 15072-face two-polarisation sweep this redundancy dominated the
+        # post-init solve (h2par alone was ~170s/pol of c128 GEMM).  Build them
+        # ONCE here -- crucially, BEFORE the complex128 cast-back below, so the
+        # GEMMs run in complex64 (≈8x faster on the GPU + half the PCIe traffic)
+        # and the cached blocks stay c64 (half the host RSS).  diff_ss/diff_sh
+        # are reused from the resident assemble (zero extra GEMM); only the host
+        # fallback path recomputes them.  numpy upcasts the c64 cache to c128
+        # automatically when it multiplies the complex128 solve RHS, so the
+        # solve output keeps full c128 dtype.
+        _diff_ss_cap = locals().get('_sv_diff_ss_cap', None)
+        _diff_sh_cap = locals().get('_sv_diff_sh_cap', None)
+        if _diff_ss_cap is not None:
+            self._sv_diff_ss = _diff_ss_cap
+        else:
+            self._sv_diff_ss = matmul_dispatch(L1, G2['ss']) - G2e['ss']
+        if _diff_sh_cap is not None:
+            self._sv_diff_sh = _diff_sh_cap
+        else:
+            self._sv_diff_sh = matmul_dispatch(L1, G2['sh']) - G2e['sh']
+        self._sv_G2piGamma = matmul_dispatch(G2pi, Gamma)
+        self._sv_L1mL2p_Gamma = matmul_dispatch(L1 - L2p, Gamma)
+        if is_cupy_array(self._sv_diff_ss):
+            self._sv_diff_ss = to_host(self._sv_diff_ss)
+        if is_cupy_array(self._sv_diff_sh):
+            self._sv_diff_sh = to_host(self._sv_diff_sh)
+        if is_cupy_array(self._sv_G2piGamma):
+            self._sv_G2piGamma = to_host(self._sv_G2piGamma)
+        if is_cupy_array(self._sv_L1mL2p_Gamma):
+            self._sv_L1mL2p_Gamma = to_host(self._sv_L1mL2p_Gamma)
 
         # MNPBEM_GPU_LOWPREC: cast the host-resident auxiliary matrices
         # back to complex128 so downstream solve()/_solve_single sees its
@@ -1296,6 +1346,8 @@ class BEMRetLayer(object):
             m_lu: Any,
             m_full: Any = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
 
+        _sv_t0 = _prof_mark('solve.enter', _time.perf_counter(), None)
+
         # MATLAB mldivide.m: Decompose vector potential into parallel and perpendicular
         aperp = _inner(zunit, a)  # (n,)
         apar = a - _outer(zunit, aperp)  # (n, 3)
@@ -1305,14 +1357,21 @@ class BEMRetLayer(object):
 
         # MATLAB: De = De - matmul(Sigma1e, phi) + ik*inner(nvec, matmul(L1, a))
         #             + ik*inner(npar, matmul((L1-L2p)*Gamma, alpha))
+        # v1.7.6: (L1 - L2p) @ Gamma is a constant (n,n) matrix per wavelength;
+        # cache it in init() (self._sv_L1mL2p_Gamma) instead of recomputing the
+        # host c128 GEMM once per polarisation.
+        L1mL2p_Gamma = getattr(self, '_sv_L1mL2p_Gamma', None)
+        if L1mL2p_Gamma is None:
+            L1mL2p_Gamma = (L1 - L2p) @ Gamma
         De = (De
             - _matmul(Sigma1e, phi)
             + 1j * k * _inner(nvec, _matmul(L1, a))
-            + 1j * k * _inner(npar, _matmul((L1 - L2p) @ Gamma, alpha)))
+            + 1j * k * _inner(npar, _matmul(L1mL2p_Gamma, alpha)))
 
         # Decompose alpha into parallel and perpendicular
         alphaperp = _inner(zunit, alpha)  # (n,)
         alphapar = alpha - _outer(zunit, alphaperp)  # (n, 3)
+        _sv_t0 = _prof_mark('solve.rhs-build (Sigma/L1 GEMV)', _sv_t0, None)
 
         # Solve 2x2 block matrix equation: [sig2; h2perp] = m \ [De; alphaperp]
         rhs = np.empty(2 * n, dtype = complex)
@@ -1333,14 +1392,27 @@ class BEMRetLayer(object):
                 xi2 = lu_solve(m_lu, rhs, check_finite=False, overwrite_b=True)
         sig2 = xi2[:n]
         h2perp = xi2[n:]
+        _sv_t0 = _prof_mark('solve.m_full-LU-backsub', _sv_t0, None)
 
         # Parallel component of surface current (MATLAB mldivide.m line 60-62)
         # h2par = matmul(G2pi*Gamma, alphapar + ik*outer(npar,
         #           matmul(L1*G2.ss - G2e.ss, sig2) + matmul(L1*G2.sh - G2e.sh, h2perp)))
-        diff_ss = matmul_dispatch(L1, G2['ss']) - G2e['ss']
-        diff_sh = matmul_dispatch(L1, G2['sh']) - G2e['sh']
+        # v1.7.6: diff_ss/diff_sh/G2pi@Gamma are constant per wavelength and are
+        # built once in init() (self._sv_*); reuse the cache to skip 3 large
+        # GEMMs per polarisation.  Fall back to recompute if init() didn't run
+        # through the cached path.
+        diff_ss = getattr(self, '_sv_diff_ss', None)
+        diff_sh = getattr(self, '_sv_diff_sh', None)
+        G2piGamma = getattr(self, '_sv_G2piGamma', None)
+        if diff_ss is None:
+            diff_ss = matmul_dispatch(L1, G2['ss']) - G2e['ss']
+        if diff_sh is None:
+            diff_sh = matmul_dispatch(L1, G2['sh']) - G2e['sh']
+        if G2piGamma is None:
+            G2piGamma = matmul_dispatch(G2pi, Gamma)
         inner_par = _matmul(diff_ss, sig2) + _matmul(diff_sh, h2perp)
-        h2par = _matmul(matmul_dispatch(G2pi, Gamma), alphapar + 1j * k * _outer(npar, inner_par))
+        h2par = _matmul(G2piGamma, alphapar + 1j * k * _outer(npar, inner_par))
+        _sv_t0 = _prof_mark('solve.h2par (3x nxn GEMM)', _sv_t0, None)
 
         # Surface current h2 = h2par + outer(zunit, h2perp)
         h2 = h2par + _outer(zunit, h2perp)
@@ -1356,6 +1428,7 @@ class BEMRetLayer(object):
         h1par = _matmul(G1i, _matmul(G2['p'], h2par) + apar)
         # h1 = h1par + outer(zunit, h1perp)
         h1 = h1par + _outer(zunit, h1perp)
+        _sv_t0 = _prof_mark('solve.sig1/h1 (G1i/G2 GEMV)', _sv_t0, None)
 
         return sig1, sig2, h1, h2
 
