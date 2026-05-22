@@ -849,7 +849,7 @@ class GreenRetRefined(object):
                 H1p = Gp.copy()
                 nvec = self.p1.nvec
                 idx = np.arange(len(nvec))
-                H1p[idx, :, idx] += 2.0 * np.pi * nvec.T
+                H1p[idx, :, idx] += 2.0 * np.pi * nvec
                 return H1p
             return Gp
 
@@ -859,7 +859,7 @@ class GreenRetRefined(object):
                 H2p = Gp.copy()
                 nvec = self.p1.nvec
                 idx = np.arange(len(nvec))
-                H2p[idx, :, idx] -= 2.0 * np.pi * nvec.T
+                H2p[idx, :, idx] -= 2.0 * np.pi * nvec
                 return H2p
             return Gp
 
@@ -1214,7 +1214,7 @@ class GreenRetRefined(object):
                 H1p = Gp.copy()
                 nvec = self.p1.nvec
                 idx = np.arange(len(nvec))
-                H1p[idx, :, idx] += 2.0 * np.pi * nvec.T
+                H1p[idx, :, idx] += 2.0 * np.pi * nvec
                 return H1p
             return Gp
 
@@ -1230,7 +1230,7 @@ class GreenRetRefined(object):
                 H2p = Gp.copy()
                 nvec = self.p1.nvec
                 idx = np.arange(len(nvec))
-                H2p[idx, :, idx] -= 2.0 * np.pi * nvec.T
+                H2p[idx, :, idx] -= 2.0 * np.pi * nvec
                 return H2p
             return Gp
 
