@@ -6,7 +6,7 @@
 ##### Retarded
 * `BEMRet, BEMRetLayer, BEMRetIter(?)`
 ##### Quasistatic
-* `BEMStat, `
+* `BEMStat, BEMStatlayer`
 ##### Iterative
 * Unclear, has `BEMRetIter`but also other functions shown below
 * `op = dict(sim='ret', interp='curv', RelCutoff=2)`
