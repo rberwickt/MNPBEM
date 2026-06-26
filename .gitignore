@@ -14,3 +14,9 @@ mnpbem.egg-info/
 # build artefacts
 dist/
 build/
+.vscode/
+
+# allow gui images through
+!/GUI/
+!/GUI/images/
+!/GUI/images/*.png
