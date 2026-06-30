@@ -8,6 +8,7 @@ class SimulationState:
     dat_tables: dict[str, Any] = field(default_factory=dict)            # For materials
     raw_results: Optional[Any] = None                                   # Simulation output (Sigma)
 
+    solver: str = "Retarded"
     # Excitation Setttings ============================================
     excitation_source: str = "Plane Wave"
 

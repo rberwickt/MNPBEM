@@ -1,6 +1,7 @@
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QPushButton, QLabel
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QPushButton, QLabel, QHBoxLayout
 from PySide6.QtCore import Signal
 from ..simulation_state import SimulationState
+from ..widgets.solver_options import SolverOptionsWidget
 from ..widgets.excitation_settings import ExcitationSettingsWidget
 class SimulationPage(QWidget):
     sim_completed = Signal()  # Alert main.py when simulation finishes
@@ -8,22 +9,37 @@ class SimulationPage(QWidget):
     def __init__(self, state: SimulationState):
         super().__init__()
         self.state = state  # Access to the shared state
+        self.columns = QHBoxLayout(self)
+        self.col_1 = QVBoxLayout()
         
-        self.layout = QVBoxLayout(self)
-        self.label = QLabel("Waiting for data from Page 1...", self)
-        self.layout.addWidget(self.label)
+        self.solver_options = SolverOptionsWidget(state)
+        self.col_1.addWidget(self.solver_options)
         
         self.excitation_settings = ExcitationSettingsWidget(state)
-        self.layout.addWidget(self.excitation_settings)
+        self.col_1.addWidget(self.excitation_settings)
 
         self.run_btn = QPushButton("Run Simulation", self)
         self.run_btn.clicked.connect(self.run_simulation)
-        self.layout.addWidget(self.run_btn)
+        self.col_1.addWidget(self.run_btn)
+
+        self.col_2 = QVBoxLayout()
+        
+        self.solver_options2 = SolverOptionsWidget(state)
+        self.col_2.addWidget(self.solver_options2)
+        
+        self.excitation_settings2 = ExcitationSettingsWidget(state)
+        self.col_2.addWidget(self.excitation_settings2)
+
+        self.run_btn2 = QPushButton("Run Simulation", self)
+        self.run_btn2.clicked.connect(self.run_simulation)
+        self.col_2.addWidget(self.run_btn2)
+
+        self.columns.addLayout(self.col_1)
+        self.columns.addLayout(self.col_2)
 
     def setup_ui_from_state(self):
         """Called by main window right before switching to this page"""
-        table_names = list(self.state.dat_tables.keys())
-        self.label.setText(f"Loaded tables available for simulation: {', '.join(table_names)}")
+        pass
 
     def run_simulation(self):
         # 1. Pull the tables loaded by Page 1

@@ -26,7 +26,7 @@ class MainController(QMainWindow):
         else:
             print(f"Warning: Icon not found at {icon_path}")
         
-        self.resize(900, 600)
+        self.resize(800, 700)
 
         self.stacked_widget = QStackedWidget()
         self.setCentralWidget(self.stacked_widget)
