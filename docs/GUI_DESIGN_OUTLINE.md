@@ -165,6 +165,6 @@ Judging from the GUI github images, it displays pretty standard MATLAB graph vie
 ### (Stretch Goal) Tutorial Page
 Presumably installation instructions are bundled in the readme on github, but a quick tutorial page of how to use the GUI could be useful, but is definitely not needed for a complete and functional GUI 
 
-
+ 
 ## Temp Notes
 Implementing everything using Qt for Python (pyqt), 3D rendering can be handled by PyVista (example found here https://docs.pyvista.org/examples/00-load/create_tri_surface)
