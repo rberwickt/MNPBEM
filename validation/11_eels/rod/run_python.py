@@ -10,10 +10,10 @@ MNPBEM_ROOT = '/home/yoojk20/workspace/MNPBEM'
 sys.path.insert(0, MNPBEM_ROOT)
 sys.path.insert(0, os.path.join(MNPBEM_ROOT, 'validation'))
 
-from mnpbem.materials import EpsConst, EpsTable
-from mnpbem.geometry import trirod, ComParticle
-from mnpbem.bem import BEMStat, BEMRet
-from mnpbem.simulation import EELSStat, EELSRet
+from GUI.mnpbem.materials import EpsConst, EpsTable
+from GUI.mnpbem.geometry import trirod, ComParticle
+from GUI.mnpbem.bem import BEMStat, BEMRet
+from GUI.mnpbem.simulation import EELSStat, EELSRet
 
 from _common import save_csv, load_csv, save_timing, plot_comparison
 

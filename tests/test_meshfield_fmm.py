@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from mnpbem.simulation.meshfield_fmm import (
+from GUI.mnpbem.simulation.meshfield_fmm import (
     fmm_available,
     eval_freespace_field,
     eval_freespace_potential,
@@ -106,10 +106,10 @@ def test_field_complex_zk_lossy():
 # ---------------------------------------------------------------------------
 
 def test_meshfield_dense_vs_fmm_ret():
-    from mnpbem.materials import EpsConst, EpsDrude
-    from mnpbem.geometry import trisphere, ComParticle
-    from mnpbem.bem import BEMRet
-    from mnpbem.simulation import PlaneWaveRet, MeshField
+    from GUI.mnpbem.materials import EpsConst, EpsDrude
+    from GUI.mnpbem.geometry import trisphere, ComParticle
+    from GUI.mnpbem.bem import BEMRet
+    from GUI.mnpbem.simulation import PlaneWaveRet, MeshField
 
     epsm = EpsConst(1.0)
     epsAu = EpsDrude(eps0 = 10.0, wp = 9.065, gammad = 0.0708, name = 'gold')

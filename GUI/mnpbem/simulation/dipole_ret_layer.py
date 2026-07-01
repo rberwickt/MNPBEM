@@ -826,7 +826,7 @@ class DipoleRetLayer(object):
         # particle from select+vertcat), MATLAB takes the else-branch and uses
         # the supplied pinfty directly. We mirror this by checking the flag
         # SpectrumRetLayer set during init.
-        from ..simulation.dipole_ret import DipoleRet
+        from .dipole_ret import DipoleRet
         dip_free = DipoleRet(pt, dip=None)
         dip_free.dip = dip_moments
 

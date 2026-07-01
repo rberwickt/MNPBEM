@@ -18,12 +18,12 @@ tolerance on every case (uniform AND non-uniform eps).
 import numpy as np
 import pytest
 
-from mnpbem.materials import EpsConst, EpsTable
-from mnpbem.geometry import trisphere, ComParticle, LayerStructure
-from mnpbem.bem import BEMRetLayer
-from mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
-from mnpbem.simulation import PlaneWaveRetLayer
-from mnpbem.greenfun import GreenTabLayer
+from GUI.mnpbem.materials import EpsConst, EpsTable
+from GUI.mnpbem.geometry import trisphere, ComParticle, LayerStructure
+from GUI.mnpbem.bem import BEMRetLayer
+from GUI.mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
+from GUI.mnpbem.simulation import PlaneWaveRetLayer
+from GUI.mnpbem.greenfun import GreenTabLayer
 
 
 _POL = np.array([[1.0, 0.0, 0.0]])

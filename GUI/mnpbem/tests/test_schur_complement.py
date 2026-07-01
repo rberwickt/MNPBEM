@@ -8,13 +8,14 @@ shrinking the dominant LU-factor matrix to the core-only block.
 """
 
 import numpy as np
+from GUI.mnpbem.greenfun import CompStruct
 import pytest
 
-from mnpbem.materials import EpsConst, EpsDrude, EpsNonlocal, make_nonlocal_pair
-from mnpbem.geometry import ComParticle, trisphere
-from mnpbem.greenfun import CompStruct, coverlayer
-from mnpbem.bem import BEMStat, BEMRet
-from mnpbem.bem.schur_helpers import (
+from GUI.mnpbem.materials import EpsConst, EpsDrude, EpsNonlocal, make_nonlocal_pair
+from GUI.mnpbem.geometry import ComParticle, trisphere
+from GUI.mnpbem.greenfun import coverlayer
+from GUI.mnpbem.bem import BEMStat, BEMRet
+from GUI.mnpbem.bem.schur_helpers import (
     schur_eliminate, detect_shell_core_partition, schur_memory_estimate,
 )
 
@@ -313,7 +314,7 @@ def test_bemret_schur_no_coverlayer_passthrough():
 # by mnpbem/tests/test_schur_iter.py.
 
 def test_bemstatiter_schur_no_coverlayer_passthrough():
-    from mnpbem.bem import BEMStatIter
+    from GUI.mnpbem.bem import BEMStatIter
 
     eps_b = EpsConst(1.0)
     eps_m = EpsDrude.gold()
@@ -326,7 +327,7 @@ def test_bemstatiter_schur_no_coverlayer_passthrough():
 
 
 def test_bemretiter_schur_no_coverlayer_passthrough():
-    from mnpbem.bem import BEMRetIter
+    from GUI.mnpbem.bem import BEMRetIter
 
     eps_b = EpsConst(1.0)
     eps_m = EpsDrude.gold()

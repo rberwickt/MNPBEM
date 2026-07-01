@@ -19,11 +19,11 @@ from scipy.special import kv as besselk
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from mnpbem.simulation.eels_base import EELSBase
-from mnpbem.simulation.eels_stat import EELSStat
-from mnpbem.simulation.eels_ret import EELSRet
-from mnpbem.misc.units import EV2NM, BOHR, HARTREE, FINE
-from mnpbem.greenfun import CompStruct
+from GUI.mnpbem.simulation.eels_base import EELSBase
+from GUI.mnpbem.simulation.eels_stat import EELSStat
+from GUI.mnpbem.simulation.eels_ret import EELSRet
+from GUI.mnpbem.misc.units import EV2NM, BOHR, HARTREE, FINE
+from GUI.mnpbem.greenfun import CompStruct
 
 
 # ---------------------------------------------------------------------------

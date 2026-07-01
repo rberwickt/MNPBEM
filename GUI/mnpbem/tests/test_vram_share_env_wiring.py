@@ -54,7 +54,7 @@ def patch_multi_gpu(monkeypatch):
     def fake_warn(msg):
         captured.setdefault('warnings', []).append(msg)
 
-    import mnpbem.utils.multi_gpu_lu as mgl
+    import GUI.mnpbem.utils.multi_gpu_lu as mgl
     monkeypatch.setattr(mgl, 'factor_multi_gpu', fake_factor)
     monkeypatch.setattr(mgl, 'cusolvermg_available', fake_available)
     monkeypatch.setattr(mgl, 'warn_fallback', fake_warn)
@@ -80,14 +80,14 @@ def clean_env(monkeypatch):
 
 
 def test_env_defaults_unset_returns_none(clean_env):
-    from mnpbem.utils.gpu import _vram_share_env_defaults
+    from GUI.mnpbem.utils.gpu import _vram_share_env_defaults
     n, b, d = _vram_share_env_defaults()
     assert n is None and b is None and d is None
 
 
 def test_env_defaults_n_only(monkeypatch, clean_env):
     monkeypatch.setenv('MNPBEM_VRAM_SHARE_GPUS', '4')
-    from mnpbem.utils.gpu import _vram_share_env_defaults
+    from GUI.mnpbem.utils.gpu import _vram_share_env_defaults
     n, b, d = _vram_share_env_defaults()
     assert n == 4
     assert b == 'cusolvermg'
@@ -98,7 +98,7 @@ def test_env_defaults_full_set(monkeypatch, clean_env):
     monkeypatch.setenv('MNPBEM_VRAM_SHARE_GPUS', '2')
     monkeypatch.setenv('MNPBEM_VRAM_SHARE_BACKEND', 'cusolvermg')
     monkeypatch.setenv('MNPBEM_VRAM_SHARE_DEVICE_IDS', '0,2,3,5')
-    from mnpbem.utils.gpu import _vram_share_env_defaults
+    from GUI.mnpbem.utils.gpu import _vram_share_env_defaults
     n, b, d = _vram_share_env_defaults()
     assert n == 2
     assert b == 'cusolvermg'
@@ -108,21 +108,21 @@ def test_env_defaults_full_set(monkeypatch, clean_env):
 def test_env_defaults_master_off_disables(monkeypatch, clean_env):
     monkeypatch.setenv('MNPBEM_VRAM_SHARE', '0')
     monkeypatch.setenv('MNPBEM_VRAM_SHARE_GPUS', '4')
-    from mnpbem.utils.gpu import _vram_share_env_defaults
+    from GUI.mnpbem.utils.gpu import _vram_share_env_defaults
     n, b, d = _vram_share_env_defaults()
     assert n is None and b is None and d is None
 
 
 def test_env_defaults_n1_disables(monkeypatch, clean_env):
     monkeypatch.setenv('MNPBEM_VRAM_SHARE_GPUS', '1')
-    from mnpbem.utils.gpu import _vram_share_env_defaults
+    from GUI.mnpbem.utils.gpu import _vram_share_env_defaults
     n, b, d = _vram_share_env_defaults()
     assert n is None
 
 
 def test_env_defaults_invalid_value_safe(monkeypatch, clean_env):
     monkeypatch.setenv('MNPBEM_VRAM_SHARE_GPUS', 'not_a_number')
-    from mnpbem.utils.gpu import _vram_share_env_defaults
+    from GUI.mnpbem.utils.gpu import _vram_share_env_defaults
     n, _, _ = _vram_share_env_defaults()
     assert n is None
 
@@ -133,7 +133,7 @@ def test_env_defaults_invalid_value_safe(monkeypatch, clean_env):
 
 
 def test_dispatch_no_env_no_kwarg_takes_cpu(clean_env, patch_multi_gpu):
-    from mnpbem.utils.gpu import lu_factor_dispatch
+    from GUI.mnpbem.utils.gpu import lu_factor_dispatch
     A = np.eye(8, dtype=np.complex128)
     pkg = lu_factor_dispatch(A)
     assert pkg[0] == 'cpu'
@@ -142,7 +142,7 @@ def test_dispatch_no_env_no_kwarg_takes_cpu(clean_env, patch_multi_gpu):
 
 def test_dispatch_env_only_routes_mgpu(monkeypatch, clean_env, patch_multi_gpu):
     monkeypatch.setenv('MNPBEM_VRAM_SHARE_GPUS', '4')
-    from mnpbem.utils.gpu import lu_factor_dispatch
+    from GUI.mnpbem.utils.gpu import lu_factor_dispatch
     A = np.eye(8, dtype=np.complex128)
     pkg = lu_factor_dispatch(A)
     assert pkg[0] == 'mgpu'
@@ -155,7 +155,7 @@ def test_dispatch_env_with_backend(monkeypatch, clean_env, patch_multi_gpu):
     monkeypatch.setenv('MNPBEM_VRAM_SHARE_GPUS', '3')
     monkeypatch.setenv('MNPBEM_VRAM_SHARE_BACKEND', 'cusolvermg')
     monkeypatch.setenv('MNPBEM_VRAM_SHARE_DEVICE_IDS', '0,1,2')
-    from mnpbem.utils.gpu import lu_factor_dispatch
+    from GUI.mnpbem.utils.gpu import lu_factor_dispatch
     A = np.eye(4, dtype=np.complex128)
     pkg = lu_factor_dispatch(A)
     assert pkg[0] == 'mgpu'
@@ -165,7 +165,7 @@ def test_dispatch_env_with_backend(monkeypatch, clean_env, patch_multi_gpu):
 
 def test_dispatch_kwarg_overrides_env(monkeypatch, clean_env, patch_multi_gpu):
     monkeypatch.setenv('MNPBEM_VRAM_SHARE_GPUS', '4')
-    from mnpbem.utils.gpu import lu_factor_dispatch
+    from GUI.mnpbem.utils.gpu import lu_factor_dispatch
     A = np.eye(4, dtype=np.complex128)
     pkg = lu_factor_dispatch(A, n_gpus=2)
     assert pkg[0] == 'mgpu'
@@ -175,7 +175,7 @@ def test_dispatch_kwarg_overrides_env(monkeypatch, clean_env, patch_multi_gpu):
 
 def test_dispatch_kwarg_n1_overrides_env_off(monkeypatch, clean_env, patch_multi_gpu):
     monkeypatch.setenv('MNPBEM_VRAM_SHARE_GPUS', '4')
-    from mnpbem.utils.gpu import lu_factor_dispatch
+    from GUI.mnpbem.utils.gpu import lu_factor_dispatch
     A = np.eye(4, dtype=np.complex128)
     pkg = lu_factor_dispatch(A, n_gpus=1)
     # Explicit n_gpus=1 should disable mgpu path even when env says 4.
@@ -185,7 +185,7 @@ def test_dispatch_kwarg_n1_overrides_env_off(monkeypatch, clean_env, patch_multi
 def test_dispatch_master_off(monkeypatch, clean_env, patch_multi_gpu):
     monkeypatch.setenv('MNPBEM_VRAM_SHARE', '0')
     monkeypatch.setenv('MNPBEM_VRAM_SHARE_GPUS', '4')
-    from mnpbem.utils.gpu import lu_factor_dispatch
+    from GUI.mnpbem.utils.gpu import lu_factor_dispatch
     A = np.eye(4, dtype=np.complex128)
     pkg = lu_factor_dispatch(A)
     assert pkg[0] == 'cpu'
@@ -198,7 +198,7 @@ def test_dispatch_master_off(monkeypatch, clean_env, patch_multi_gpu):
 
 def test_solve_after_env_factor_returns_numpy(monkeypatch, clean_env, patch_multi_gpu):
     monkeypatch.setenv('MNPBEM_VRAM_SHARE_GPUS', '2')
-    from mnpbem.utils.gpu import lu_factor_dispatch, lu_solve_dispatch
+    from GUI.mnpbem.utils.gpu import lu_factor_dispatch, lu_solve_dispatch
     A = np.eye(4, dtype=np.complex128)
     b = np.ones(4, dtype=np.complex128)
     pkg = lu_factor_dispatch(A)
@@ -214,7 +214,7 @@ def test_solve_after_env_factor_returns_numpy(monkeypatch, clean_env, patch_mult
 
 def test_solve_dispatch_env_routes_through_mgpu(monkeypatch, clean_env, patch_multi_gpu):
     monkeypatch.setenv('MNPBEM_VRAM_SHARE_GPUS', '2')
-    from mnpbem.utils.gpu import solve_dispatch
+    from GUI.mnpbem.utils.gpu import solve_dispatch
     A = np.eye(4, dtype=np.complex128)
     b = np.ones(4, dtype=np.complex128)
     x = solve_dispatch(A, b)
@@ -225,7 +225,7 @@ def test_solve_dispatch_env_routes_through_mgpu(monkeypatch, clean_env, patch_mu
 
 
 def test_solve_dispatch_no_env_takes_cpu(clean_env, patch_multi_gpu):
-    from mnpbem.utils.gpu import solve_dispatch
+    from GUI.mnpbem.utils.gpu import solve_dispatch
     A = np.eye(4, dtype=np.complex128) * 2.0
     b = np.ones(4, dtype=np.complex128) * 2.0
     x = solve_dispatch(A, b)

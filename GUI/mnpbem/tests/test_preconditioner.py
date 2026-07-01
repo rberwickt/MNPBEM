@@ -8,12 +8,12 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from mnpbem.materials import EpsConst
-from mnpbem.geometry import ComParticle, trisphere
-from mnpbem.bem import BEMRetIter, BEMStatIter
-from mnpbem.bem.preconditioner import HMatrixLUPreconditioner
-from mnpbem.simulation.planewave_ret import PlaneWaveRet
-from mnpbem.simulation.planewave_stat import PlaneWaveStat
+from GUI.mnpbem.materials import EpsConst
+from GUI.mnpbem.geometry import ComParticle, trisphere
+from GUI.mnpbem.bem import BEMRetIter, BEMStatIter
+from GUI.mnpbem.bem.preconditioner import HMatrixLUPreconditioner
+from GUI.mnpbem.simulation.planewave_ret import PlaneWaveRet
+from GUI.mnpbem.simulation.planewave_stat import PlaneWaveStat
 
 
 # ---------------------------------------------------------------------------

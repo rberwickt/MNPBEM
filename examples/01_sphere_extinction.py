@@ -24,10 +24,10 @@ import matplotlib.pyplot as plt
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
-from mnpbem.materials import EpsConst, EpsTable
-from mnpbem.geometry import trisphere, ComParticle
-from mnpbem.bem import BEMRet
-from mnpbem.simulation import PlaneWaveRet
+from GUI.mnpbem.materials import EpsConst, EpsTable
+from GUI.mnpbem.geometry import trisphere, ComParticle
+from GUI.mnpbem.bem import BEMRet
+from GUI.mnpbem.simulation import PlaneWaveRet
 
 
 def main():

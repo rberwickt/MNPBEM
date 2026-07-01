@@ -10,14 +10,14 @@ MNPBEM_ROOT = '/home/yoojk20/workspace/MNPBEM'
 sys.path.insert(0, MNPBEM_ROOT)
 sys.path.insert(0, os.path.join(MNPBEM_ROOT, 'validation'))
 
-from mnpbem.materials import EpsConst, EpsTable
-from mnpbem.geometry import trispheresegment, ComParticleMirror
-from mnpbem.bem import BEMStat, BEMRet
-from mnpbem.bem.bem_stat_mirror import BEMStatMirror
-from mnpbem.bem.bem_ret_mirror import BEMRetMirror
-from mnpbem.simulation import PlaneWaveStat, PlaneWaveRet
-from mnpbem.simulation.planewave_stat_mirror import PlaneWaveStatMirror
-from mnpbem.simulation.planewave_ret_mirror import PlaneWaveRetMirror
+from GUI.mnpbem.materials import EpsConst, EpsTable
+from GUI.mnpbem.geometry import trispheresegment, ComParticleMirror
+from GUI.mnpbem.bem import BEMStat, BEMRet
+from GUI.mnpbem.bem.bem_stat_mirror import BEMStatMirror
+from GUI.mnpbem.bem.bem_ret_mirror import BEMRetMirror
+from GUI.mnpbem.simulation import PlaneWaveStat, PlaneWaveRet
+from GUI.mnpbem.simulation.planewave_stat_mirror import PlaneWaveStatMirror
+from GUI.mnpbem.simulation.planewave_ret_mirror import PlaneWaveRetMirror
 
 from _common import save_csv, load_csv, save_timing, plot_spectrum, plot_comparison
 

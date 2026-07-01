@@ -13,13 +13,13 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from mnpbem.materials.eps_table import EpsTable
-from mnpbem.materials.eps_const import EpsConst
-from mnpbem.geometry import trisphere, ComParticle
-from mnpbem.geometry.compoint import ComPoint, Point
-from mnpbem.greenfun.compgreen_stat import CompGreenStat, CompStruct
-from mnpbem.simulation import PlaneWaveStat, MeshField
-from mnpbem.bem import BEMStat
+from GUI.mnpbem.materials.eps_table import EpsTable
+from GUI.mnpbem.materials.eps_const import EpsConst
+from GUI.mnpbem.geometry import trisphere, ComParticle
+from GUI.mnpbem.geometry.compoint import ComPoint, Point
+from GUI.mnpbem.greenfun.compgreen_stat import CompGreenStat, CompStruct
+from GUI.mnpbem.simulation import PlaneWaveStat, MeshField
+from GUI.mnpbem.bem import BEMStat
 
 
 # ============================================================================

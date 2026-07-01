@@ -5,8 +5,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from mnpbem.greenfun.clustertree import ClusterTree
-from mnpbem.greenfun.hmatrix import HMatrix
+from GUI.mnpbem.greenfun.clustertree import ClusterTree
+from GUI.mnpbem.greenfun.hmatrix import HMatrix
 
 
 # ---------------------------------------------------------------------------

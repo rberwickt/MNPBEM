@@ -23,11 +23,11 @@ import matplotlib.pyplot as plt
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
-from mnpbem.materials import EpsConst, EpsTable
-from mnpbem.geometry import trisphere, ComParticle
-from mnpbem.bem import BEMRet
-from mnpbem.simulation import EELSRet, EELSBase
-from mnpbem.misc import EV2NM
+from GUI.mnpbem.materials import EpsConst, EpsTable
+from GUI.mnpbem.geometry import trisphere, ComParticle
+from GUI.mnpbem.bem import BEMRet
+from GUI.mnpbem.simulation import EELSRet, EELSBase
+from GUI.mnpbem.misc import EV2NM
 
 
 def main():

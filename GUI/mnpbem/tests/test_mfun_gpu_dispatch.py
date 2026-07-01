@@ -4,10 +4,10 @@ import sys
 import numpy as np
 import pytest
 
-from mnpbem.materials import EpsConst, EpsTable
-from mnpbem.geometry import trisphere, ComParticle
-from mnpbem.bem import BEMRetIter
-from mnpbem.simulation import PlaneWaveRet
+from GUI.mnpbem.materials import EpsConst, EpsTable
+from GUI.mnpbem.geometry import trisphere, ComParticle
+from GUI.mnpbem.bem import BEMRetIter
+from GUI.mnpbem.simulation import PlaneWaveRet
 
 
 try:

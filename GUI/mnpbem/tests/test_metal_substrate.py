@@ -21,8 +21,8 @@ import os
 import numpy as np
 import pytest
 
-from mnpbem.materials import EpsConst, EpsTable
-from mnpbem.geometry import LayerStructure, trisphere
+from GUI.mnpbem.materials import EpsConst, EpsTable
+from GUI.mnpbem.geometry import LayerStructure, trisphere
 
 
 def _build_layer(eps_substrate, z_interface = -21.0):
@@ -72,7 +72,7 @@ def test_zlinlogspace_no_nan_on_interface():
 def test_tabspace_metal_substrate_no_index_error():
     """Reproduce Issue 3 mini case: particle on metal substrate, tabspace
     + GreenTabLayer.set should not raise IndexError."""
-    from mnpbem.greenfun import GreenTabLayer
+    from GUI.mnpbem.greenfun import GreenTabLayer
 
     eps_gold = EpsTable('gold.dat')
     layer, _ = _build_layer(eps_gold, z_interface = -21.0)
@@ -101,7 +101,7 @@ def test_tabspace_metal_substrate_no_index_error():
 
 def test_dielectric_substrate_unchanged():
     """The fix must not alter behavior on the well-tested glass case."""
-    from mnpbem.greenfun import GreenTabLayer
+    from GUI.mnpbem.greenfun import GreenTabLayer
 
     eps_glass = EpsConst(2.25)
     layer, _ = _build_layer(eps_glass, z_interface = 0.0)

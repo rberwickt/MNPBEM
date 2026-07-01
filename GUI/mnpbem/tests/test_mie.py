@@ -14,13 +14,13 @@ if "mnpbem" not in sys.modules:
     _stub.__path__ = ["mnpbem"]
     sys.modules["mnpbem"] = _stub
 
-from mnpbem.mie.spherical_harmonics import spharm, sphtable, vecspharm
-from mnpbem.mie.mie_gans import MieGans
-from mnpbem.mie.mie_stat import MieStat
-from mnpbem.mie.mie_ret import MieRet, _riccatibessel, _miecoefficients
-from mnpbem.mie.mie_solver import mie_solver
-from mnpbem.materials.eps_const import EpsConst
-from mnpbem.materials.eps_drude import EpsDrude
+from GUI.mnpbem.mie.spherical_harmonics import spharm, sphtable, vecspharm
+from GUI.mnpbem.mie.mie_gans import MieGans
+from GUI.mnpbem.mie.mie_stat import MieStat
+from GUI.mnpbem.mie.mie_ret import MieRet, _riccatibessel, _miecoefficients
+from GUI.mnpbem.mie.mie_solver import mie_solver
+from GUI.mnpbem.materials.eps_const import EpsConst
+from GUI.mnpbem.materials.eps_drude import EpsDrude
 
 
 # ============================================================================

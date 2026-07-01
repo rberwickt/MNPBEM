@@ -18,7 +18,7 @@ try:
     from .refine_utils import refinematrix
     from ..geometry.particle import Particle
 except ImportError:
-    from refine_utils import refinematrix
+    from GUI.mnpbem.greenfun.refine_utils import refinematrix
     # For standalone testing, we'll handle the import later
     Particle = None
 
@@ -156,7 +156,7 @@ class GreenRetRefined(object):
             # Standalone testing - import here
             import sys
             sys.path.insert(0, '/home/user/MNPBEM')
-            from mnpbem.geometry.particle import Particle as Part
+            from GUI.mnpbem.geometry.particle import Particle as Part
             pos, weight, row_indices = Part.quadpol(self.p2, face2_idx)
         else:
             pos, weight, row_indices = Particle.quadpol(self.p2, face2_idx)
@@ -318,7 +318,7 @@ class GreenRetRefined(object):
             # Standalone testing - import here
             import sys
             sys.path.insert(0, '/home/user/MNPBEM')
-            from mnpbem.geometry.particle import Particle as Part
+            from GUI.mnpbem.geometry.particle import Particle as Part
             pos_all, w_sparse, row_indices = Part.quad(self.p2, reface)
         else:
             pos_all, w_sparse, row_indices = Particle.quad(self.p2, reface)
@@ -1375,7 +1375,7 @@ if __name__ == "__main__":
 
     import sys
     sys.path.insert(0, '/home/user/MNPBEM')
-    from mnpbem.geometry.particle import Particle
+    from GUI.mnpbem.geometry.particle import Particle
 
     # Create simple test particle
     verts = np.array([

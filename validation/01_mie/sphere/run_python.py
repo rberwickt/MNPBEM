@@ -10,8 +10,8 @@ MNPBEM_ROOT = '/home/yoojk20/workspace/MNPBEM'
 sys.path.insert(0, MNPBEM_ROOT)
 sys.path.insert(0, os.path.join(MNPBEM_ROOT, 'validation'))
 
-from mnpbem.materials import EpsConst, EpsTable
-from mnpbem.mie import MieStat, MieRet, MieGans
+from GUI.mnpbem.materials import EpsConst, EpsTable
+from GUI.mnpbem.mie import MieStat, MieRet, MieGans
 
 from _common import (save_csv, load_csv, save_timing, plot_spectrum, plot_comparison)
 

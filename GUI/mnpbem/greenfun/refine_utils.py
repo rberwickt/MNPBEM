@@ -252,7 +252,7 @@ if __name__ == "__main__":
     # Create a simple test particle (manual construction to avoid trisphere issues)
     import sys
     sys.path.insert(0, '/home/user/MNPBEM')
-    from mnpbem.geometry.particle import Particle
+    from GUI.mnpbem.geometry.particle import Particle
 
     # Simple cube made of triangles
     verts = np.array([

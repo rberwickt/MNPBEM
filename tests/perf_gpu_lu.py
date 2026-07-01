@@ -11,7 +11,7 @@ import numpy as np
 
 
 def _bench_lu(N, n_solves=2):
-    import mnpbem.utils.gpu as gmod
+    import GUI.mnpbem.utils.gpu as gmod
 
     rng = np.random.default_rng(42)
     A = rng.standard_normal((N, N)) + 1j * rng.standard_normal((N, N))

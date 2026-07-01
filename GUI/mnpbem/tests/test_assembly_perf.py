@@ -24,11 +24,11 @@ hard-coded baseline file so the tests stay self-contained.
 import numpy as np
 import pytest
 
-from mnpbem.geometry import tricube
-from mnpbem.geometry.particle import Particle
-from mnpbem.geometry.comparticle import ComParticle
-from mnpbem.materials import EpsTable, EpsConst
-from mnpbem.bem import BEMRet
+from GUI.mnpbem.geometry import tricube
+from GUI.mnpbem.geometry.particle import Particle
+from GUI.mnpbem.geometry.comparticle import ComParticle
+from GUI.mnpbem.materials import EpsTable, EpsConst
+from GUI.mnpbem.bem import BEMRet
 
 
 def _make_particle(n = 8):

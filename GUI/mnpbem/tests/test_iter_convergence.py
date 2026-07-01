@@ -21,10 +21,10 @@ machine precision on every case (uniform AND non-uniform eps).
 import numpy as np
 import pytest
 
-from mnpbem.materials import EpsConst, EpsTable
-from mnpbem.geometry import trisphere, ComParticle
-from mnpbem.bem import BEMRet, BEMRetIter
-from mnpbem.simulation import PlaneWaveRet
+from GUI.mnpbem.materials import EpsConst, EpsTable
+from GUI.mnpbem.geometry import trisphere, ComParticle
+from GUI.mnpbem.bem import BEMRet, BEMRetIter
+from GUI.mnpbem.simulation import PlaneWaveRet
 
 
 _ENEI_TEST = np.array([380.0, 540.0, 700.0])

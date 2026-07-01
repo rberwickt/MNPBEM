@@ -6,9 +6,9 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from mnpbem.materials.eps_const import EpsConst
-from mnpbem.geometry import trisphere, ComParticle
-from mnpbem.bem.plasmonmode import plasmonmode
+from GUI.mnpbem.materials.eps_const import EpsConst
+from GUI.mnpbem.geometry import trisphere, ComParticle
+from GUI.mnpbem.bem.plasmonmode import plasmonmode
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +92,7 @@ class TestPlasmonmodeOrthogonality(object):
         ene, ur, ul = plasmonmode(p, nev = nev)
 
         # Reconstruct F to verify F @ ur[:,k] ~ ene[k] * ur[:,k]
-        from mnpbem.greenfun import CompGreenStat
+        from GUI.mnpbem.greenfun import CompGreenStat
         g = CompGreenStat(p, p)
         F = g.F
 

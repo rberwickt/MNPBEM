@@ -28,14 +28,14 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from mnpbem.materials.eps_const import EpsConst
-from mnpbem.geometry import trisphere, ComParticle
-from mnpbem.geometry.layer_structure import LayerStructure
-from mnpbem.greenfun import CompStruct
-from mnpbem.bem.bem_stat import BEMStat
-from mnpbem.bem.bem_stat_layer import BEMStatLayer
-from mnpbem.bem.bem_stat_iter import BEMStatIter
-from mnpbem.bem.bem_stat_eig import BEMStatEig
+from GUI.mnpbem.materials.eps_const import EpsConst
+from GUI.mnpbem.geometry import trisphere, ComParticle
+from GUI.mnpbem.geometry.layer_structure import LayerStructure
+from GUI.mnpbem.greenfun import CompStruct
+from GUI.mnpbem.bem.bem_stat import BEMStat
+from GUI.mnpbem.bem.bem_stat_layer import BEMStatLayer
+from GUI.mnpbem.bem.bem_stat_iter import BEMStatIter
+from GUI.mnpbem.bem.bem_stat_eig import BEMStatEig
 
 
 # ---------------------------------------------------------------------------

@@ -25,7 +25,7 @@ cupy_required = pytest.mark.skipif(not _HAS_CUPY, reason = 'cupy not installed')
 
 def test_eye_like_lu_cpu_returns_numpy():
 
-    from mnpbem.utils.gpu import eye_like_lu
+    from GUI.mnpbem.utils.gpu import eye_like_lu
 
     fake_cpu_lu = ('cpu', None, None)
     eye_h = eye_like_lu(fake_cpu_lu, 5)
@@ -35,7 +35,7 @@ def test_eye_like_lu_cpu_returns_numpy():
 
 def test_to_host_passthrough_numpy():
 
-    from mnpbem.utils.gpu import to_host
+    from GUI.mnpbem.utils.gpu import to_host
 
     a = np.arange(6).reshape(2, 3)
     b = to_host(a)
@@ -45,7 +45,7 @@ def test_to_host_passthrough_numpy():
 
 def test_is_cupy_array_false_for_numpy():
 
-    from mnpbem.utils.gpu import is_cupy_array
+    from GUI.mnpbem.utils.gpu import is_cupy_array
 
     assert is_cupy_array(np.zeros(3)) is False
     assert is_cupy_array([1, 2, 3]) is False
@@ -54,7 +54,7 @@ def test_is_cupy_array_false_for_numpy():
 @cupy_required
 def test_eye_like_lu_gpu_returns_cupy():
 
-    from mnpbem.utils.gpu import eye_like_lu
+    from GUI.mnpbem.utils.gpu import eye_like_lu
 
     fake_gpu_lu = ('gpu', cp.zeros((4, 4)), cp.zeros(4, dtype = cp.int32))
     eye_d = eye_like_lu(fake_gpu_lu, 4)
@@ -64,7 +64,7 @@ def test_eye_like_lu_gpu_returns_cupy():
 @cupy_required
 def test_to_host_brings_cupy_to_numpy():
 
-    from mnpbem.utils.gpu import to_host
+    from GUI.mnpbem.utils.gpu import to_host
 
     a = cp.arange(6).reshape(2, 3)
     h = to_host(a)
@@ -75,7 +75,7 @@ def test_to_host_brings_cupy_to_numpy():
 @cupy_required
 def test_is_cupy_array_true_for_cupy():
 
-    from mnpbem.utils.gpu import is_cupy_array
+    from GUI.mnpbem.utils.gpu import is_cupy_array
 
     assert is_cupy_array(cp.zeros(3)) is True
 
@@ -84,7 +84,7 @@ def test_is_cupy_array_true_for_cupy():
 def test_lu_solve_native_keeps_cupy_when_b_is_cupy():
     # Bug 1 root cause: lu_solve_dispatch round-tripped cupy → numpy.
     # lu_solve_native should keep a cupy result when b is cupy.
-    from mnpbem.utils.gpu import lu_factor_dispatch, lu_solve_native
+    from GUI.mnpbem.utils.gpu import lu_factor_dispatch, lu_solve_native
 
     n = 64
     A = np.eye(n) + 0.01 * np.random.randn(n, n)
@@ -101,7 +101,7 @@ def test_lu_solve_native_keeps_cupy_on_gpu_lu():
     # round-trip).  Callers in bem_ret.py rely on this when MNPBEM_GPU_NATIVE
     # is active so downstream cupy broadcast ops do not mix host/device.
     import os
-    from mnpbem.utils.gpu import lu_factor_dispatch, lu_solve_native
+    from GUI.mnpbem.utils.gpu import lu_factor_dispatch, lu_solve_native
 
     old_gpu = os.environ.get('MNPBEM_GPU')
     old_threshold = os.environ.get('MNPBEM_GPU_THRESHOLD')
@@ -110,7 +110,7 @@ def test_lu_solve_native_keeps_cupy_on_gpu_lu():
     try:
         # Force re-detection of USE_GPU / GPU_THRESHOLD by reloading
         import importlib
-        from mnpbem.utils import gpu as gpu_mod
+        from GUI.mnpbem.utils import gpu as gpu_mod
         importlib.reload(gpu_mod)
 
         n = 64
@@ -130,7 +130,7 @@ def test_lu_solve_native_keeps_cupy_on_gpu_lu():
         else:
             os.environ['MNPBEM_GPU_THRESHOLD'] = old_threshold
         import importlib
-        from mnpbem.utils import gpu as gpu_mod
+        from GUI.mnpbem.utils import gpu as gpu_mod
         importlib.reload(gpu_mod)
 
 
@@ -140,8 +140,8 @@ def test_lu_solve_native_keeps_cupy_on_gpu_lu():
 
 def _build_small_sphere(nfaces_target: int = 144) -> Any:
 
-    from mnpbem.geometry import ComParticle, trisphere
-    from mnpbem.materials import EpsConst, EpsDrude
+    from GUI.mnpbem.geometry import ComParticle, trisphere
+    from GUI.mnpbem.materials import EpsConst, EpsDrude
 
     eps_b = EpsConst(1.0)
     eps_m = EpsDrude.gold()
@@ -154,7 +154,7 @@ def test_bemret_cpu_init_smoke():
     # Bug 1 / 2 regression: BEMRet on a tiny sphere must initialize and
     # solve without raising the cupy/numpy mix error.  Runs on CPU only
     # (MNPBEM_GPU not set / 0) so it is portable.
-    from mnpbem.bem import BEMRet
+    from GUI.mnpbem.bem import BEMRet
 
     p = _build_small_sphere()
     bem = BEMRet(p)
@@ -170,7 +170,7 @@ def test_bemret_cpu_init_smoke():
 
 def test_aca_block_accepts_numpy_indices():
 
-    from mnpbem.greenfun.hmatrix import HMatrix
+    from GUI.mnpbem.greenfun.hmatrix import HMatrix
 
     # Use a synthetic low-rank matrix so ACA terminates quickly.
     rank = 3
@@ -197,7 +197,7 @@ def test_aca_block_accepts_cupy_indices():
     # Bug 3 regression: pass cupy index arrays.  Coercion inside
     # _aca_block must succeed without raising the implicit-numpy index
     # error and reconstruction must remain bit-equivalent.
-    from mnpbem.greenfun.hmatrix import HMatrix
+    from GUI.mnpbem.greenfun.hmatrix import HMatrix
 
     rank = 2
     m_full, n_full = 24, 20
@@ -224,8 +224,8 @@ def test_aca_block_accepts_cupy_indices():
 
 def test_resolve_bem_class_strings():
 
-    from mnpbem.utils.multi_gpu import _resolve_bem_class
-    from mnpbem.bem import BEMRet, BEMRetIter, BEMRetLayer, BEMRetLayerIter
+    from GUI.mnpbem.utils.multi_gpu import _resolve_bem_class
+    from GUI.mnpbem.bem import BEMRet, BEMRetIter, BEMRetLayer, BEMRetLayerIter
 
     assert _resolve_bem_class(None) is BEMRet
     assert _resolve_bem_class('BEMRet') is BEMRet
@@ -236,7 +236,7 @@ def test_resolve_bem_class_strings():
 
 def test_resolve_bem_class_invalid_raises():
 
-    from mnpbem.utils.multi_gpu import _resolve_bem_class
+    from GUI.mnpbem.utils.multi_gpu import _resolve_bem_class
 
     with pytest.raises(ValueError, match = '\\[error\\]'):
         _resolve_bem_class('NoSuchSolver')
@@ -248,7 +248,7 @@ def test_solve_spectrum_multi_gpu_signature_accepts_bem_class():
     # so the dispatcher exits before forking workers.
     import inspect
 
-    from mnpbem.utils.multi_gpu import solve_spectrum_multi_gpu
+    from GUI.mnpbem.utils.multi_gpu import solve_spectrum_multi_gpu
 
     sig = inspect.signature(solve_spectrum_multi_gpu)
     assert 'bem_class' in sig.parameters, \
@@ -260,8 +260,8 @@ def test_solve_spectrum_multi_gpu_bem_class_name_passthrough():
     # reaches the worker arg list.
     import multiprocessing as mp
 
-    from mnpbem.utils import multi_gpu as mg
-    from mnpbem.bem import BEMRetIter
+    from GUI.mnpbem.utils import multi_gpu as mg
+    from GUI.mnpbem.bem import BEMRetIter
 
     captured = []
 

@@ -16,48 +16,21 @@ Main modules:
 __version__ = "1.7.2"
 
 # Materials: dielectric functions
-from .materials import EpsConst, EpsTable, EpsDrude, EpsFun, epsfun, EpsNonlocal, make_nonlocal_pair
+from GUI.mnpbem.bem import BEMIter, BEMLayerMirror, BEMRet, BEMRetIter, BEMRetLayer, BEMRetLayerIter, BEMRetMirror, BEMStat, BEMStatEig, BEMStatEigMirror, BEMStatIter, BEMStatLayer, BEMStatMirror
+from GUI.mnpbem.geometry import ComParticle, ComParticleMirror, ComPoint, CompStructMirror, EdgeProfile, Particle, Point, Polygon, Polygon3, fvgrid, tricube, tripolygon, trirod, trisphere, trispherescale, trispheresegment, tritorus
+from GUI.mnpbem.greenfun import ACACompGreenRet, ACACompGreenRetLayer, ACACompGreenStat, ClusterTree, CompGreenRet, CompGreenRetLayer, CompGreenRetMirror, CompGreenStat, CompGreenStatLayer, CompGreenStatMirror, CompGreenTabLayer, CompStruct, GreenRetLayer, GreenStat, GreenTabLayer, HMatrix
+from GUI.mnpbem.materials import EpsConst, EpsDrude, EpsFun, EpsNonlocal, EpsTable, make_nonlocal_pair
+from GUI.mnpbem.mie import MieGans, MieRet, MieStat, spharm, sphtable, vecspharm
+
+from .materials import epsfun
 
 # Geometry: particles, mesh generators, and connectivity
 from .geometry import (
-    Particle,
-    ComParticle,
-    ComParticleMirror,
-    CompStructMirror,
-    Point,
-    ComPoint,
-    EdgeProfile,
-    Polygon,
-    Polygon3,
-    trisphere,
-    trirod,
-    tricube,
-    tritorus,
-    trispheresegment,
-    trispherescale,
-    tripolygon,
-    fvgrid,
     connect,
 )
 
 # Green's functions: static, retarded, mirror, layer, ACA
 from .greenfun import (
-    GreenStat,
-    CompGreenStat,
-    CompGreenRet,
-    CompStruct,
-    CompGreenStatMirror,
-    CompGreenRetMirror,
-    CompGreenStatLayer,
-    CompGreenRetLayer,
-    CompGreenTabLayer,
-    GreenRetLayer,
-    GreenTabLayer,
-    ClusterTree,
-    HMatrix,
-    ACACompGreenStat,
-    ACACompGreenRet,
-    ACACompGreenRetLayer,
     greenfunction,
 )
 
@@ -66,19 +39,6 @@ from .bem import BemBase
 
 # BEM solvers: static, retarded, mirror, layer, iterative
 from .bem import (
-    BEMStat,
-    BEMRet,
-    BEMStatMirror,
-    BEMRetMirror,
-    BEMStatEig,
-    BEMStatEigMirror,
-    BEMLayerMirror,
-    BEMStatLayer,
-    BEMRetLayer,
-    BEMIter,
-    BEMStatIter,
-    BEMRetIter,
-    BEMRetLayerIter,
     plasmonmode,
 )
 
@@ -116,12 +76,6 @@ from .spectrum import (
 
 # Mie theory: spherical harmonics, Mie solvers
 from .mie import (
-    spharm,
-    sphtable,
-    vecspharm,
-    MieGans,
-    MieStat,
-    MieRet,
     mie_solver,
 )
 

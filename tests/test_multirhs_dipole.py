@@ -13,10 +13,10 @@ import numpy as np
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from mnpbem.materials import EpsConst, EpsTable
-from mnpbem.geometry import trisphere, ComParticle, ComPoint
-from mnpbem.bem import BEMStat, BEMRet
-from mnpbem.simulation import DipoleStat, DipoleRet
+from GUI.mnpbem.materials import EpsConst, EpsTable
+from GUI.mnpbem.geometry import trisphere, ComParticle, ComPoint
+from GUI.mnpbem.bem import BEMStat, BEMRet
+from GUI.mnpbem.simulation import DipoleStat, DipoleRet
 
 
 def _build():

@@ -7,11 +7,11 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from mnpbem.geometry import Compound
-from mnpbem.geometry.particle import Particle
-from mnpbem.geometry.compoint import Point
-from mnpbem.geometry.mesh_generators import trisphere
-from mnpbem.materials.eps_const import EpsConst
+from GUI.mnpbem.geometry import Compound
+from GUI.mnpbem.geometry.particle import Particle
+from GUI.mnpbem.geometry.compoint import Point
+from GUI.mnpbem.geometry.mesh_generators import trisphere
+from GUI.mnpbem.materials.eps_const import EpsConst
 
 
 REF_PATH = os.path.join(os.path.dirname(__file__), 'data', 'compound_ref.txt')

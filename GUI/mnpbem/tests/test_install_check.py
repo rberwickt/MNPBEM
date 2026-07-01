@@ -5,8 +5,8 @@ from typing import Any
 
 import pytest
 
-import mnpbem.utils.gpu as gpu_mod
-from mnpbem.utils.gpu import (
+import GUI.mnpbem.utils.gpu as gpu_mod
+from GUI.mnpbem.utils.gpu import (
     get_install_hint,
     has_gpu_capability,
     require_gpu_or_raise,

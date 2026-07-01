@@ -17,11 +17,11 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from mnpbem.materials.eps_const import EpsConst
-from mnpbem.geometry import trisphere, ComParticle
-from mnpbem.greenfun import CompStruct
-from mnpbem.bem.bem_stat import BEMStat
-from mnpbem.bem.bem_stat_eig import BEMStatEig
+from GUI.mnpbem.materials.eps_const import EpsConst
+from GUI.mnpbem.geometry import trisphere, ComParticle
+from GUI.mnpbem.greenfun import CompStruct
+from GUI.mnpbem.bem.bem_stat import BEMStat
+from GUI.mnpbem.bem.bem_stat_eig import BEMStatEig
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +135,7 @@ class TestBEMStatEigInit(object):
         np.testing.assert_array_equal(bem.mat, mat_first)
 
     def test_init_updates_for_new_wavelength(self):
-        from mnpbem.materials.eps_drude import EpsDrude
+        from GUI.mnpbem.materials.eps_drude import EpsDrude
         sphere = trisphere(32, 10.0)
         eps = [EpsConst(1.0), EpsDrude.gold()]
         p = ComParticle(eps, [sphere], [[2, 1]])
@@ -346,7 +346,7 @@ class TestBEMStatEigDecayRate(object):
     def test_absorption_finite(self):
         """Compute absorption using PlaneWaveStat with BEMStatEig
         and verify the result is finite and positive."""
-        from mnpbem.simulation.planewave_stat import PlaneWaveStat
+        from GUI.mnpbem.simulation.planewave_stat import PlaneWaveStat
 
         p = _make_sphere_particle(n_verts = 32, diameter = 10.0)
         nev = min(p.nfaces - 2, 15)
@@ -365,7 +365,7 @@ class TestBEMStatEigDecayRate(object):
 
     def test_absorption_agrees_with_bemstat(self):
         """Absorption from BEMStatEig should be close to BEMStat result."""
-        from mnpbem.simulation.planewave_stat import PlaneWaveStat
+        from GUI.mnpbem.simulation.planewave_stat import PlaneWaveStat
 
         p = _make_sphere_particle(n_verts = 32, diameter = 10.0)
         nev = min(p.nfaces - 2, 15)

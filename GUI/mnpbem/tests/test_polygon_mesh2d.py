@@ -10,8 +10,8 @@ if "mnpbem" not in sys.modules:
     _stub.__path__ = ["mnpbem"]
     sys.modules["mnpbem"] = _stub
 
-from mnpbem.geometry.polygon import Polygon
-from mnpbem.geometry.mesh2d import (
+from GUI.mnpbem.geometry.polygon import Polygon
+from GUI.mnpbem.geometry.mesh2d import (
     inpoly, triarea, quality, circumcircle, fixmesh,
     smoothmesh, refine, connectivity, mesh2d,
 )

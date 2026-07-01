@@ -8,11 +8,11 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from mnpbem.geometry.polygon import Polygon
-from mnpbem.geometry.edgeprofile import EdgeProfile
-from mnpbem.geometry.polygon3 import Polygon3
-from mnpbem.geometry.particle import Particle
-from mnpbem.geometry.mesh_generators import tripolygon
+from GUI.mnpbem.geometry.polygon import Polygon
+from GUI.mnpbem.geometry.edgeprofile import EdgeProfile
+from GUI.mnpbem.geometry.polygon3 import Polygon3
+from GUI.mnpbem.geometry.particle import Particle
+from GUI.mnpbem.geometry.mesh_generators import tripolygon
 
 
 # ================================================================

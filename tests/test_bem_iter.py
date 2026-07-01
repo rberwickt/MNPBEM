@@ -13,10 +13,10 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from mnpbem.materials import EpsConst, EpsDrude
-from mnpbem.geometry import trisphere, ComParticle
-from mnpbem.bem import BEMStat, BEMStatIter, BEMRet, BEMRetIter, BEMIter
-from mnpbem.simulation import PlaneWaveStat, PlaneWaveRet
+from GUI.mnpbem.materials import EpsConst, EpsDrude
+from GUI.mnpbem.geometry import trisphere, ComParticle
+from GUI.mnpbem.bem import BEMStat, BEMStatIter, BEMRet, BEMRetIter, BEMIter
+from GUI.mnpbem.simulation import PlaneWaveStat, PlaneWaveRet
 
 
 def _make_sphere(nfaces=144, radius=10.0):

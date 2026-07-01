@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from mnpbem.geometry.compoint import Point, ComPoint
+from GUI.mnpbem.geometry.compoint import Point, ComPoint
 
 
 # ---------------------------------------------------------------------------
@@ -327,7 +327,7 @@ class TestComPointDipoleInterface(object):
 class TestComPointWithDipoleStat(object):
 
     def test_dipole_stat_construction(self):
-        from mnpbem.simulation.dipole_stat import DipoleStat
+        from GUI.mnpbem.simulation.dipole_stat import DipoleStat
 
         eps = [MockEps(1.0)]
         pos = np.array([[0, 0, 20]], dtype = np.float64)
@@ -342,7 +342,7 @@ class TestComPointWithDipoleStat(object):
         np.testing.assert_allclose(exc.dip[0, :, 0], [0, 0, 1])
 
     def test_dipole_stat_three_dipoles(self):
-        from mnpbem.simulation.dipole_stat import DipoleStat
+        from GUI.mnpbem.simulation.dipole_stat import DipoleStat
 
         eps = [MockEps(1.0)]
         pos = np.array([[0, 0, 20]], dtype = np.float64)
@@ -352,7 +352,7 @@ class TestComPointWithDipoleStat(object):
         assert exc.dip.shape == (1, 3, 3)
 
     def test_dipole_stat_multiple_positions(self):
-        from mnpbem.simulation.dipole_stat import DipoleStat
+        from GUI.mnpbem.simulation.dipole_stat import DipoleStat
 
         eps = [MockEps(1.0)]
         pos = np.array([[0, 0, 10], [0, 0, 20], [0, 0, 30]], dtype = np.float64)

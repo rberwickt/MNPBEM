@@ -46,8 +46,8 @@ cupy_required = pytest.mark.skipif(not _HAS_CUPY, reason = 'cupy not installed')
 
 def _build_mirror_sphere(sym: str = 'x'):
 
-    from mnpbem.geometry import trisphere, ComParticleMirror
-    from mnpbem.materials import EpsDrude, EpsConst
+    from GUI.mnpbem.geometry import trisphere, ComParticleMirror
+    from GUI.mnpbem.materials import EpsDrude, EpsConst
 
     eps_au = EpsDrude(eps0 = 10.0, wp = 9.0, gammad = 0.07, name = 'Au')
     eps_vac = EpsConst(1.0)
@@ -58,8 +58,8 @@ def _build_mirror_sphere(sym: str = 'x'):
 
 def _build_mirror_dimer(sym: str = 'x'):
 
-    from mnpbem.geometry import trisphere, ComParticleMirror
-    from mnpbem.materials import EpsDrude, EpsConst
+    from GUI.mnpbem.geometry import trisphere, ComParticleMirror
+    from GUI.mnpbem.materials import EpsDrude, EpsConst
 
     eps_au = EpsDrude(eps0 = 10.0, wp = 9.0, gammad = 0.07, name = 'Au')
     eps_vac = EpsConst(1.0)
@@ -75,8 +75,8 @@ def _force_gpu_mode(use_gpu: bool) -> None:
 
 def _solve_ret_mirror(mp, enei: float = 600.0):
 
-    from mnpbem.bem.bem_ret_mirror import BEMRetMirror
-    from mnpbem.simulation.planewave_ret_mirror import PlaneWaveRetMirror
+    from GUI.mnpbem.bem.bem_ret_mirror import BEMRetMirror
+    from GUI.mnpbem.simulation.planewave_ret_mirror import PlaneWaveRetMirror
 
     bem = BEMRetMirror(mp)
     exc = PlaneWaveRetMirror([[1, 0, 0]], [[0, 0, 1]])
@@ -88,8 +88,8 @@ def _solve_ret_mirror(mp, enei: float = 600.0):
 
 def _solve_stat_mirror(mp, enei: float = 600.0):
 
-    from mnpbem.bem.bem_stat_mirror import BEMStatMirror
-    from mnpbem.simulation.planewave_stat_mirror import PlaneWaveStatMirror
+    from GUI.mnpbem.bem.bem_stat_mirror import BEMStatMirror
+    from GUI.mnpbem.simulation.planewave_stat_mirror import PlaneWaveStatMirror
 
     bem = BEMStatMirror(mp)
     exc = PlaneWaveStatMirror([[1, 0, 0]])
@@ -99,8 +99,8 @@ def _solve_stat_mirror(mp, enei: float = 600.0):
 
 def _solve_eig_mirror(mp, nev: int = 30, enei: float = 600.0):
 
-    from mnpbem.bem.bem_stat_eig_mirror import BEMStatEigMirror
-    from mnpbem.simulation.planewave_stat_mirror import PlaneWaveStatMirror
+    from GUI.mnpbem.bem.bem_stat_eig_mirror import BEMStatEigMirror
+    from GUI.mnpbem.simulation.planewave_stat_mirror import PlaneWaveStatMirror
 
     bem = BEMStatEigMirror(mp, nev = nev)
     exc = PlaneWaveStatMirror([[1, 0, 0]])
@@ -113,7 +113,7 @@ def _solve_eig_mirror(mp, nev: int = 30, enei: float = 600.0):
 # ---------------------------------------------------------------------------
 
 def test_bem_layer_mirror_not_implemented():
-    from mnpbem.bem.bem_layer_mirror import BEMLayerMirror
+    from GUI.mnpbem.bem.bem_layer_mirror import BEMLayerMirror
     with pytest.raises(NotImplementedError):
         BEMLayerMirror(None)
 
@@ -219,9 +219,9 @@ def test_mirror_eval_host_promotes_cupy():
     # MNPBEM_GPU=1.
     _force_gpu_mode(True)
     mp = _build_mirror_sphere('x')
-    from mnpbem.bem.bem_ret_mirror import _mirror_eval_host
+    from GUI.mnpbem.bem.bem_ret_mirror import _mirror_eval_host
     g = mp  # not used directly, helper takes the CompGreenRetMirror
-    from mnpbem.greenfun.compgreen_ret_mirror import CompGreenRetMirror
+    from GUI.mnpbem.greenfun.compgreen_ret_mirror import CompGreenRetMirror
     cgrm = CompGreenRetMirror(mp)
     blocks = _mirror_eval_host(cgrm, 0, 0, 'G', 600.0)
     assert all(isinstance(b, np.ndarray) for b in blocks)
@@ -232,8 +232,8 @@ def test_mirror_eval_host_promotes_cupy():
 def test_mirror_stat_eval_host_promotes_cupy():
     _force_gpu_mode(True)
     mp = _build_mirror_sphere('x')
-    from mnpbem.bem.bem_stat_mirror import _mirror_stat_eval_host
-    from mnpbem.greenfun.compgreen_stat_mirror import CompGreenStatMirror
+    from GUI.mnpbem.bem.bem_stat_mirror import _mirror_stat_eval_host
+    from GUI.mnpbem.greenfun.compgreen_stat_mirror import CompGreenStatMirror
     cgsm = CompGreenStatMirror(mp)
     blocks = _mirror_stat_eval_host(cgsm, 'F')
     assert all(isinstance(b, np.ndarray) for b in blocks)
@@ -248,8 +248,8 @@ def test_mirror_stat_eval_host_promotes_cupy():
 def test_bem_ret_mirror_gpu_no_memory_growth():
     _force_gpu_mode(True)
     mp = _build_mirror_sphere('x')
-    from mnpbem.bem.bem_ret_mirror import BEMRetMirror
-    from mnpbem.simulation.planewave_ret_mirror import PlaneWaveRetMirror
+    from GUI.mnpbem.bem.bem_ret_mirror import BEMRetMirror
+    from GUI.mnpbem.simulation.planewave_ret_mirror import PlaneWaveRetMirror
 
     pool = cp.get_default_memory_pool()
     pool.free_all_blocks()

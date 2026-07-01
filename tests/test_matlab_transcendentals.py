@@ -18,7 +18,7 @@ import os
 import numpy as np
 import pytest
 
-from mnpbem.utils.matlab_compat import (
+from GUI.mnpbem.utils.matlab_compat import (
     mexp, mlog, mlog10, mlog2, mlog1p, mexpm1, msqrt,
     msin, mcos, mtan, msinh, mcosh, mtanh,
     masin, macos, matan,
@@ -163,7 +163,7 @@ def test_mround_with_digits_scalar():
 
 def test_fallback_when_unavailable(monkeypatch):
     """When MATLAB lib isn't available, wrappers fall back to numpy."""
-    import mnpbem.utils.matlab_compat as mc
+    import GUI.mnpbem.utils.matlab_compat as mc
     monkeypatch.setattr(mc, '_MATLAB_ATAN2_AVAILABLE', False)
     x = np.array([0.3, 1.2, 4.5])
     assert np.allclose(mc.mexp(x), np.exp(x))

@@ -30,18 +30,18 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from mnpbem.geometry.comparticle_mirror import ComParticleMirror, CompStructMirror
-from mnpbem.greenfun import CompStruct
-from mnpbem.greenfun.compgreen_stat_mirror import CompGreenStatMirror
-from mnpbem.greenfun.compgreen_ret_mirror import CompGreenRetMirror
-from mnpbem.bem.bem_stat_mirror import BEMStatMirror
-from mnpbem.bem.bem_ret_mirror import BEMRetMirror
-from mnpbem.bem.bem_stat_eig_mirror import BEMStatEigMirror
-from mnpbem.bem.bem_layer_mirror import BEMLayerMirror
-from mnpbem.simulation.dipole_stat_mirror import DipoleStatMirror
-from mnpbem.simulation.dipole_ret_mirror import DipoleRetMirror
-from mnpbem.simulation.planewave_stat_mirror import PlaneWaveStatMirror
-from mnpbem.simulation.planewave_ret_mirror import PlaneWaveRetMirror
+from GUI.mnpbem.geometry.comparticle_mirror import ComParticleMirror, CompStructMirror
+from GUI.mnpbem.greenfun import CompStruct
+from GUI.mnpbem.greenfun.compgreen_stat_mirror import CompGreenStatMirror
+from GUI.mnpbem.greenfun.compgreen_ret_mirror import CompGreenRetMirror
+from GUI.mnpbem.bem.bem_stat_mirror import BEMStatMirror
+from GUI.mnpbem.bem.bem_ret_mirror import BEMRetMirror
+from GUI.mnpbem.bem.bem_stat_eig_mirror import BEMStatEigMirror
+from GUI.mnpbem.bem.bem_layer_mirror import BEMLayerMirror
+from GUI.mnpbem.simulation.dipole_stat_mirror import DipoleStatMirror
+from GUI.mnpbem.simulation.dipole_ret_mirror import DipoleRetMirror
+from GUI.mnpbem.simulation.planewave_stat_mirror import PlaneWaveStatMirror
+from GUI.mnpbem.simulation.planewave_ret_mirror import PlaneWaveRetMirror
 
 
 # ---------------------------------------------------------------------------
@@ -829,7 +829,7 @@ class TestCompGreenStatMirror:
         MATLAB: div = sign * 2 * pi * outer(nvec, eye(n))
         This creates a (n, 3, n) tensor.
         """
-        from mnpbem.greenfun.compgreen_stat_mirror import _outer_nvec_eye
+        from GUI.mnpbem.greenfun.compgreen_stat_mirror import _outer_nvec_eye
 
         n = 4
         nvec = np.random.randn(n, 3)
@@ -879,7 +879,7 @@ class TestCompGreenRetMirror:
         MATLAB: indmul(mat, v, ind) in compgreenretmirror/field.m
         Multiplies mat{ind(k)} * v(:, k, :) for k=1,2,3.
         """
-        from mnpbem.greenfun.compgreen_ret_mirror import _indmul
+        from GUI.mnpbem.greenfun.compgreen_ret_mirror import _indmul
 
         n = 5
         mat_list = [np.random.randn(n, n) for _ in range(2)]
@@ -897,7 +897,7 @@ class TestCompGreenRetMirror:
 
         MATLAB: if length(mat{1}) == 1 && mat{1} == 0 -> u = 0
         """
-        from mnpbem.greenfun.compgreen_ret_mirror import _indmul
+        from GUI.mnpbem.greenfun.compgreen_ret_mirror import _indmul
 
         mat_list = [0, 0]
         v = np.random.randn(5, 3)
@@ -911,7 +911,7 @@ class TestCompGreenRetMirror:
         MATLAB: indcross(mat, v, ind) in compgreenretmirror/field.m
         Computes cross product using mat{ind(k)}(:, i, :) components.
         """
-        from mnpbem.greenfun.compgreen_ret_mirror import _indcross
+        from GUI.mnpbem.greenfun.compgreen_ret_mirror import _indcross
 
         n = 4
         # 3D matrices (n, 3, n) simulating Green function derivatives
@@ -927,7 +927,7 @@ class TestCompGreenRetMirror:
 
         MATLAB: matmul() in various mirror files checks for scalar zero.
         """
-        from mnpbem.greenfun.compgreen_ret_mirror import _matmul
+        from GUI.mnpbem.greenfun.compgreen_ret_mirror import _matmul
 
         assert _matmul(0, np.array([1, 2, 3])) == 0
         assert _matmul(np.array([1, 2, 3]), 0) == 0
@@ -1036,7 +1036,7 @@ class TestBEMRetMirror:
 
         MATLAB: subtract(a, b) in initmat.m subtracts cell arrays.
         """
-        from mnpbem.bem.bem_ret_mirror import _subtract_list
+        from GUI.mnpbem.bem.bem_ret_mirror import _subtract_list
 
         A = [np.array([[1, 2], [3, 4]]), np.array([[5, 6], [7, 8]])]
         B = [np.array([[1, 1], [1, 1]]), np.array([[2, 2], [2, 2]])]
@@ -1046,7 +1046,7 @@ class TestBEMRetMirror:
 
     def test_subtract_list_with_zeros(self):
         """Test _subtract_list when some elements are zero."""
-        from mnpbem.bem.bem_ret_mirror import _subtract_list
+        from GUI.mnpbem.bem.bem_ret_mirror import _subtract_list
 
         A = [0, np.array([[1, 2]])]
         B = [np.array([[3, 4]]), 0]
@@ -1060,7 +1060,7 @@ class TestBEMRetMirror:
         MATLAB: index(v, ind) in bemretmirror/mldivide.m
         For 2D: v(:, ind), for 3D: reshape(v(:, ind, :), [siz(1), siz(3:end)])
         """
-        from mnpbem.bem.bem_ret_mirror import _index_vec
+        from GUI.mnpbem.bem.bem_ret_mirror import _index_vec
 
         v2d = np.random.randn(5, 3)
         np.testing.assert_array_equal(_index_vec(v2d, 1), v2d[:, 1])
@@ -1076,7 +1076,7 @@ class TestBEMRetMirror:
         MATLAB: vector(vx, vy, vz) in bemretmirror/mldivide.m
         Produces an (n, 3) or (n, 3, npol) array.
         """
-        from mnpbem.bem.bem_ret_mirror import _vector
+        from GUI.mnpbem.bem.bem_ret_mirror import _vector
 
         n = 5
         vx = np.random.randn(n)
@@ -1090,7 +1090,7 @@ class TestBEMRetMirror:
 
     def test_vector_helper_2d(self):
         """Test _vector helper for 2D input (npol > 1)."""
-        from mnpbem.bem.bem_ret_mirror import _vector
+        from GUI.mnpbem.bem.bem_ret_mirror import _vector
 
         n, npol = 5, 3
         vx = np.random.randn(n, npol)
@@ -1106,7 +1106,7 @@ class TestBEMRetMirror:
         MATLAB: outer(nvec, phi, eps) computes nvec .* (phi .* eps)
         Used in excitation.m for Eq. (15).
         """
-        from mnpbem.bem.bem_ret_mirror import _outer_eps
+        from GUI.mnpbem.bem.bem_ret_mirror import _outer_eps
 
         n = 4
         nvec = np.random.randn(n, 3)
@@ -1121,7 +1121,7 @@ class TestBEMRetMirror:
 
     def test_outer_eps_zero(self):
         """Test _outer_eps returns 0 for zero phi."""
-        from mnpbem.bem.bem_ret_mirror import _outer_eps
+        from GUI.mnpbem.bem.bem_ret_mirror import _outer_eps
 
         nvec = np.random.randn(4, 3)
         eps = np.random.randn(4)
@@ -1133,7 +1133,7 @@ class TestBEMRetMirror:
         MATLAB: inner(nvec, a, eps) computes sum(nvec .* a, 2) .* eps
         Used in excitation.m for Eq. (18).
         """
-        from mnpbem.bem.bem_ret_mirror import _inner_eps
+        from GUI.mnpbem.bem.bem_ret_mirror import _inner_eps
 
         n = 4
         nvec = np.random.randn(n, 3)
@@ -1149,7 +1149,7 @@ class TestBEMRetMirror:
         MATLAB: matmul(nx, val) where nx is a component of nvec.
         Performs element-wise multiplication.
         """
-        from mnpbem.bem.bem_ret_mirror import _matmul_diag_vec
+        from GUI.mnpbem.bem.bem_ret_mirror import _matmul_diag_vec
 
         n = 5
         n_comp = np.random.randn(n)
@@ -1984,7 +1984,7 @@ class TestHelperFunctions:
 
     def test_bemret_sub(self):
         """Test _sub helper in bem_ret_mirror."""
-        from mnpbem.bem.bem_ret_mirror import _sub
+        from GUI.mnpbem.bem.bem_ret_mirror import _sub
 
         assert _sub(0, 0) == 0
         np.testing.assert_array_equal(_sub(np.array([1, 2]), 0), np.array([1, 2]))
@@ -1994,7 +1994,7 @@ class TestHelperFunctions:
 
     def test_bemret_add(self):
         """Test _add helper in bem_ret_mirror."""
-        from mnpbem.bem.bem_ret_mirror import _add
+        from GUI.mnpbem.bem.bem_ret_mirror import _add
 
         assert _add(0, 0) == 0
         np.testing.assert_array_equal(_add(np.array([1, 2]), 0), np.array([1, 2]))
@@ -2004,7 +2004,7 @@ class TestHelperFunctions:
 
     def test_bemret_scalar_or_mat_sub(self):
         """Test _scalar_or_mat_sub helper."""
-        from mnpbem.bem.bem_ret_mirror import _scalar_or_mat_sub
+        from GUI.mnpbem.bem.bem_ret_mirror import _scalar_or_mat_sub
 
         assert _scalar_or_mat_sub(5.0, 3.0) == 2.0
         np.testing.assert_array_equal(
@@ -2013,7 +2013,7 @@ class TestHelperFunctions:
 
     def test_bemret_matmul(self):
         """Test _matmul helper in bem_ret_mirror."""
-        from mnpbem.bem.bem_ret_mirror import _matmul
+        from GUI.mnpbem.bem.bem_ret_mirror import _matmul
 
         assert _matmul(0, 5) == 0
         assert _matmul(5, 0) == 0
@@ -2025,7 +2025,7 @@ class TestHelperFunctions:
 
     def test_bemret_matmul_diag(self):
         """Test _matmul_diag helper in bem_ret_mirror."""
-        from mnpbem.bem.bem_ret_mirror import _matmul_diag
+        from GUI.mnpbem.bem.bem_ret_mirror import _matmul_diag
 
         assert _matmul_diag(2.0, 0) == 0
 
@@ -2038,7 +2038,7 @@ class TestHelperFunctions:
 
     def test_compgreenstat_matmul(self):
         """Test _matmul helper in compgreen_stat_mirror."""
-        from mnpbem.greenfun.compgreen_stat_mirror import _matmul
+        from GUI.mnpbem.greenfun.compgreen_stat_mirror import _matmul
 
         assert _matmul(0, np.array([1, 2])) == 0
         assert _matmul(np.array([[1, 0], [0, 1]]), 0) == 0
@@ -2049,7 +2049,7 @@ class TestHelperFunctions:
 
     def test_compgreenstat_matmul_3d(self):
         """Test _matmul_3d helper in compgreen_stat_mirror."""
-        from mnpbem.greenfun.compgreen_stat_mirror import _matmul_3d
+        from GUI.mnpbem.greenfun.compgreen_stat_mirror import _matmul_3d
 
         assert _matmul_3d(0, np.array([1])) == 0
         assert _matmul_3d(np.eye(3).reshape(1, 3, 3), 0) == 0
@@ -2064,7 +2064,7 @@ class TestHelperFunctions:
 
     def test_compgreenret_matmul_3d(self):
         """Test _matmul_3d helper in compgreen_ret_mirror."""
-        from mnpbem.greenfun.compgreen_ret_mirror import _matmul_3d
+        from GUI.mnpbem.greenfun.compgreen_ret_mirror import _matmul_3d
 
         n = 4
         a = np.random.randn(n, 3, n)

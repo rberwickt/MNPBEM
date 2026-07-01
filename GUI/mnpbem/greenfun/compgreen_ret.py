@@ -8,7 +8,7 @@ MATLAB: Greenfun/@compgreenret/
 import numpy as np
 from typing import Optional, Tuple, Any, List
 
-from mnpbem.utils.matlab_compat import msqrt
+from GUI.mnpbem.utils.matlab_compat import msqrt
 
 
 class CompGreenRet(object):
@@ -1278,7 +1278,7 @@ class CompGreenRet(object):
         h2 = self._matmul(G2i, h2)
 
         # Return CompStruct
-        from ..greenfun import CompStruct
+        from . import CompStruct
         return CompStruct(self.p1, exc.enei, sig1=sig1, sig2=sig2, h1=h1, h2=h2)
 
     def _init_solver(self, enei):

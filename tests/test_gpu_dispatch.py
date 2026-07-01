@@ -9,7 +9,7 @@ import pytest
 def _solve(A, b, env_value):
     os.environ["MNPBEM_GPU"] = env_value
     import importlib
-    import mnpbem.utils.gpu as gmod
+    import GUI.mnpbem.utils.gpu as gmod
 
     importlib.reload(gmod)
     piv = gmod.lu_factor_dispatch(A.copy())
@@ -73,7 +73,7 @@ def test_threshold_uses_cpu_for_small_matrix():
     os.environ["MNPBEM_GPU"] = "1"
     os.environ["MNPBEM_GPU_THRESHOLD"] = "1500"
     import importlib
-    import mnpbem.utils.gpu as gmod
+    import GUI.mnpbem.utils.gpu as gmod
 
     importlib.reload(gmod)
     rng = np.random.default_rng(1)

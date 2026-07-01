@@ -5,12 +5,12 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from mnpbem.materials.eps_const import EpsConst
-from mnpbem.geometry.layer_structure import LayerStructure
-from mnpbem.greenfun.compgreen_ret_layer import CompGreenRetLayer
-from mnpbem.greenfun.aca_compgreen_ret_layer import ACACompGreenRetLayer
-from mnpbem.greenfun.compgreen_stat import CompStruct
-from mnpbem.greenfun.hmatrix import HMatrix
+from GUI.mnpbem.materials.eps_const import EpsConst
+from GUI.mnpbem.geometry.layer_structure import LayerStructure
+from GUI.mnpbem.greenfun.compgreen_ret_layer import CompGreenRetLayer
+from GUI.mnpbem.greenfun.aca_compgreen_ret_layer import ACACompGreenRetLayer
+from GUI.mnpbem.greenfun.compgreen_stat import CompStruct
+from GUI.mnpbem.greenfun.hmatrix import HMatrix
 
 
 # ---------------------------------------------------------------------------

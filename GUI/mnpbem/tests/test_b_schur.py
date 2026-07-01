@@ -5,15 +5,16 @@ import time
 from typing import Any, Tuple
 
 import numpy as np
+from GUI.mnpbem.greenfun import CompStruct
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from mnpbem.materials import EpsConst, EpsDrude, EpsTable, make_nonlocal_pair
-from mnpbem.geometry import ComParticle, trisphere
-from mnpbem.greenfun import CompStruct, coverlayer
-from mnpbem.bem import BEMRet, BEMRetIter
-from mnpbem.bem.schur_iter_helpers import SchurIterOperator
+from GUI.mnpbem.materials import EpsConst, EpsDrude, EpsTable, make_nonlocal_pair
+from GUI.mnpbem.geometry import ComParticle, trisphere
+from GUI.mnpbem.greenfun import coverlayer
+from GUI.mnpbem.bem import BEMRet, BEMRetIter
+from GUI.mnpbem.bem.schur_iter_helpers import SchurIterOperator
 
 
 # ---------------------------------------------------------------------------
@@ -196,7 +197,7 @@ class TestVerification3AuAgNoRegression(object):
         pol = np.array([1.0, 0.0, 0.0])
         dirn = np.array([0.0, 0.0, 1.0])
 
-        from mnpbem.simulation import PlaneWaveRet
+        from GUI.mnpbem.simulation import PlaneWaveRet
         exc = PlaneWaveRet(pol, dirn)
 
         bem_dense = BEMRet(cp)

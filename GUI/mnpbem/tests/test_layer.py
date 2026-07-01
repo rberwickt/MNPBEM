@@ -34,9 +34,9 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from mnpbem.materials.eps_const import EpsConst
-from mnpbem.geometry.layer_structure import LayerStructure
-from mnpbem.greenfun import (
+from GUI.mnpbem.materials.eps_const import EpsConst
+from GUI.mnpbem.geometry.layer_structure import LayerStructure
+from GUI.mnpbem.greenfun import (
     CompStruct,
     GreenRetLayer,
     GreenTabLayer,
@@ -44,15 +44,15 @@ from mnpbem.greenfun import (
     CompGreenStatLayer,
     CompGreenTabLayer,
 )
-from mnpbem.greenfun.coverlayer import refine, refineret, refinestat, shift
-from mnpbem.bem.bem_stat_layer import BEMStatLayer
-from mnpbem.bem.bem_ret_layer import BEMRetLayer
-from mnpbem.simulation.dipole_stat_layer import DipoleStatLayer
-from mnpbem.simulation.dipole_ret_layer import DipoleRetLayer
-from mnpbem.simulation.planewave_stat_layer import PlaneWaveStatLayer
-from mnpbem.simulation.planewave_ret_layer import PlaneWaveRetLayer
-from mnpbem.spectrum.spectrum_stat_layer import SpectrumStatLayer
-from mnpbem.spectrum.spectrum_ret_layer import SpectrumRetLayer
+from GUI.mnpbem.greenfun.coverlayer import refine, refineret, refinestat, shift
+from GUI.mnpbem.bem.bem_stat_layer import BEMStatLayer
+from GUI.mnpbem.bem.bem_ret_layer import BEMRetLayer
+from GUI.mnpbem.simulation.dipole_stat_layer import DipoleStatLayer
+from GUI.mnpbem.simulation.dipole_ret_layer import DipoleRetLayer
+from GUI.mnpbem.simulation.planewave_stat_layer import PlaneWaveStatLayer
+from GUI.mnpbem.simulation.planewave_ret_layer import PlaneWaveRetLayer
+from GUI.mnpbem.spectrum.spectrum_stat_layer import SpectrumStatLayer
+from GUI.mnpbem.spectrum.spectrum_ret_layer import SpectrumRetLayer
 
 
 # ---------------------------------------------------------------------------
@@ -1511,7 +1511,7 @@ class TestStructuredGreen:
 
     def test_structured_green_defaults(self):
         """Default _StructuredGreen has all components set to 0."""
-        from mnpbem.greenfun.compgreen_ret_layer import _StructuredGreen
+        from GUI.mnpbem.greenfun.compgreen_ret_layer import _StructuredGreen
         sg = _StructuredGreen()
         assert sg.ss == 0
         assert sg.hh == 0
@@ -1521,7 +1521,7 @@ class TestStructuredGreen:
 
     def test_structured_green_with_arrays(self):
         """_StructuredGreen can be initialized with array components."""
-        from mnpbem.greenfun.compgreen_ret_layer import _StructuredGreen
+        from GUI.mnpbem.greenfun.compgreen_ret_layer import _StructuredGreen
         n = 4
         arr = np.eye(n, dtype=complex)
         sg = _StructuredGreen(ss=arr, hh=arr)
@@ -1531,7 +1531,7 @@ class TestStructuredGreen:
 
     def test_matmul_structured_sig(self):
         """_matmul_structured in 'sig' mode: scalar-scalar multiplication."""
-        from mnpbem.greenfun.compgreen_ret_layer import (
+        from GUI.mnpbem.greenfun.compgreen_ret_layer import (
             _StructuredGreen, _matmul_structured)
         n = 4
         G = _StructuredGreen(ss=np.eye(n, dtype=complex))
@@ -1542,7 +1542,7 @@ class TestStructuredGreen:
 
     def test_matmul_structured_h(self):
         """_matmul_structured in 'h' mode: vector-vector multiplication."""
-        from mnpbem.greenfun.compgreen_ret_layer import (
+        from GUI.mnpbem.greenfun.compgreen_ret_layer import (
             _StructuredGreen, _matmul_structured)
         n = 4
         G = _StructuredGreen(hh=2 * np.eye(n, dtype=complex))

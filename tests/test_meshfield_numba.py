@@ -12,10 +12,10 @@ import os
 import numpy as np
 import pytest
 
-from mnpbem.bem import BEMRet, BEMStat
-from mnpbem.geometry import ComParticle, trisphere
-from mnpbem.materials import EpsConst
-from mnpbem.simulation import MeshField, PlaneWaveRet, PlaneWaveStat
+from GUI.mnpbem.bem import BEMRet, BEMStat
+from GUI.mnpbem.geometry import ComParticle, trisphere
+from GUI.mnpbem.materials import EpsConst
+from GUI.mnpbem.simulation import MeshField, PlaneWaveRet, PlaneWaveStat
 
 
 def _setup():
@@ -28,7 +28,7 @@ def _setup():
 
 def _reload_numba_module():
     """Re-read MNPBEM_NUMBA after the env var changes."""
-    import mnpbem.simulation._meshfield_numba as mod
+    import GUI.mnpbem.simulation._meshfield_numba as mod
     importlib.reload(mod)
 
 

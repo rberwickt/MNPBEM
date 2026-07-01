@@ -31,7 +31,7 @@ import pytest
 
 try:
     import cupy as _cp  # type: ignore
-    from mnpbem.utils.multi_gpu_lu import cusolvermg_available
+    from GUI.mnpbem.utils.multi_gpu_lu import cusolvermg_available
     _N_GPUS = int(_cp.cuda.runtime.getDeviceCount())
     _HAS_MGPU = (_N_GPUS >= 2) and cusolvermg_available()
 except Exception:
@@ -90,7 +90,7 @@ def mgpu_env(monkeypatch):
 
 
 def _build_sphere(faces = 624):
-    from mnpbem import EpsDrude, EpsConst, trisphere, ComParticle
+    from GUI.mnpbem import EpsDrude, EpsConst, trisphere, ComParticle
 
     eps_in = EpsDrude(9.5, 138.0, 138.0)
     eps_out = EpsConst(1.0)
@@ -120,9 +120,9 @@ def test_dipole_ret_distributed_build_matches_cpu(cpu_env):
     """DipoleRet.decayrate produces CPU-identical output under mgpu build."""
 
     # CPU baseline first (cpu_env active)
-    from mnpbem.bem import BEMRet
-    from mnpbem.simulation import DipoleRet
-    from mnpbem import ComPoint
+    from GUI.mnpbem.bem import BEMRet
+    from GUI.mnpbem.simulation import DipoleRet
+    from GUI.mnpbem import ComPoint
 
     p = _build_sphere(624)
     bem = BEMRet(p)
@@ -148,9 +148,9 @@ def test_dipole_ret_distributed_build_matches_cpu(cpu_env):
         os.environ['MNPBEM_VRAM_SHARE_GPUS'] = str(min(_N_GPUS, 4))
         os.environ['MNPBEM_VRAM_SHARE_BACKEND'] = 'cusolvermg'
 
-        from mnpbem.bem import BEMRet as BEMRet2
-        from mnpbem.simulation import DipoleRet as DipoleRet2
-        from mnpbem import ComPoint as ComPoint2
+        from GUI.mnpbem.bem import BEMRet as BEMRet2
+        from GUI.mnpbem.simulation import DipoleRet as DipoleRet2
+        from GUI.mnpbem import ComPoint as ComPoint2
 
         p2 = _build_sphere(624)
         bem2 = BEMRet2(p2)
@@ -194,8 +194,8 @@ def test_eels_ret_distributed_build_matches_cpu(cpu_env):
     """EELSRet.loss / EELSRet.rad produce CPU-identical output under mgpu build."""
 
     # CPU baseline first (cpu_env active)
-    from mnpbem.bem import BEMRet
-    from mnpbem.simulation import EELSRet
+    from GUI.mnpbem.bem import BEMRet
+    from GUI.mnpbem.simulation import EELSRet
 
     p = _build_sphere(624)
     bem = BEMRet(p)
@@ -222,8 +222,8 @@ def test_eels_ret_distributed_build_matches_cpu(cpu_env):
         os.environ['MNPBEM_VRAM_SHARE_GPUS'] = str(min(_N_GPUS, 4))
         os.environ['MNPBEM_VRAM_SHARE_BACKEND'] = 'cusolvermg'
 
-        from mnpbem.bem import BEMRet as BEMRet2
-        from mnpbem.simulation import EELSRet as EELSRet2
+        from GUI.mnpbem.bem import BEMRet as BEMRet2
+        from GUI.mnpbem.simulation import EELSRet as EELSRet2
 
         p2 = _build_sphere(624)
         bem2 = BEMRet2(p2)
@@ -289,9 +289,9 @@ def test_dipole_eels_mgpu_wavelength_sweep_stable(cpu_env):
         os.environ['MNPBEM_VRAM_SHARE_GPUS'] = str(min(_N_GPUS, 4))
         os.environ['MNPBEM_VRAM_SHARE_BACKEND'] = 'cusolvermg'
 
-        from mnpbem.bem import BEMRet
-        from mnpbem.simulation import DipoleRet, EELSRet
-        from mnpbem import ComPoint
+        from GUI.mnpbem.bem import BEMRet
+        from GUI.mnpbem.simulation import DipoleRet, EELSRet
+        from GUI.mnpbem import ComPoint
 
         p = _build_sphere(624)
 

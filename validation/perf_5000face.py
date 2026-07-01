@@ -31,11 +31,11 @@ import numpy as np
 
 sys.path.insert(0, '/home/yoojk20/workspace/MNPBEM')
 
-from mnpbem.materials import EpsConst, EpsDrude
-from mnpbem.geometry import ComParticle
-from mnpbem.geometry.mesh_generators import trisphere
-from mnpbem.bem import BEMStat, BEMRet
-from mnpbem.excitation import PlaneWaveStat, PlaneWaveRet
+from GUI.mnpbem.materials import EpsConst, EpsDrude
+from GUI.mnpbem.geometry import ComParticle
+from GUI.mnpbem.geometry.mesh_generators import trisphere
+from GUI.mnpbem.bem import BEMStat, BEMRet
+from GUI.mnpbem.excitation import PlaneWaveStat, PlaneWaveRet
 
 
 def _drude_gold() -> EpsDrude:

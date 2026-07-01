@@ -2,10 +2,10 @@
 import sys
 sys.path.insert(0, '/home/yoojk20/scratch/v151_beta_iter_drift')
 import numpy as np
-from mnpbem.materials import EpsConst, EpsTable
-from mnpbem.geometry import trisphere, ComParticle
-from mnpbem.bem import BEMRet
-from mnpbem.greenfun import CompGreenRet
+from GUI.mnpbem.materials import EpsConst, EpsTable
+from GUI.mnpbem.geometry import trisphere, ComParticle
+from GUI.mnpbem.bem import BEMRet
+from GUI.mnpbem.greenfun import CompGreenRet
 
 epstab = [EpsConst(1.77), EpsTable('gold.dat'), EpsTable('silver.dat')]
 core_d, shell_t = 5.0, 1.5

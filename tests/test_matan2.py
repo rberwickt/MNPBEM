@@ -11,7 +11,7 @@ import os
 import numpy as np
 import pytest
 
-from mnpbem.utils.matlab_compat import (
+from GUI.mnpbem.utils.matlab_compat import (
     matan2,
     _MATLAB_ATAN2_AVAILABLE,
     _matan2_scalar,
@@ -140,7 +140,7 @@ def test_matan2_differs_from_numpy_in_measurable_fraction():
 
 def test_matan2_fallback_when_unavailable(monkeypatch):
     """When MATLAB lib isn't available, matan2 falls back to np.arctan2."""
-    import mnpbem.utils.matlab_compat as mc
+    import GUI.mnpbem.utils.matlab_compat as mc
     monkeypatch.setattr(mc, '_MATLAB_ATAN2_AVAILABLE', False)
     y = np.array([0.3, -1.2, 4.5])
     x = np.array([0.7,  2.1, -0.8])

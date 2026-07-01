@@ -4,15 +4,16 @@ import sys
 from typing import Tuple
 
 import numpy as np
+from GUI.mnpbem.greenfun import CompStruct
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from mnpbem.materials import EpsConst, EpsDrude, make_nonlocal_pair
-from mnpbem.geometry import ComParticle, trisphere
-from mnpbem.greenfun import CompStruct, coverlayer
-from mnpbem.bem import BEMStat, BEMStatIter, BEMRetIter
-from mnpbem.bem.schur_iter_helpers import (
+from GUI.mnpbem.materials import EpsConst, EpsDrude, make_nonlocal_pair
+from GUI.mnpbem.geometry import ComParticle, trisphere
+from GUI.mnpbem.greenfun import coverlayer
+from GUI.mnpbem.bem import BEMStat, BEMStatIter, BEMRetIter
+from GUI.mnpbem.bem.schur_iter_helpers import (
         SchurIterOperator,
         detect_iter_partition,
         schur_iter_memory_estimate,

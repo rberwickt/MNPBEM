@@ -34,11 +34,11 @@ if _N_GPUS == 0:
 
 
 # Common imports used by every smoke case.
-from mnpbem.materials import EpsConst, EpsDrude, EpsTable
-from mnpbem.geometry import trisphere, tricube, ComParticle, LayerStructure
-from mnpbem.bem import BEMRet, BEMRetLayer
-from mnpbem.simulation import PlaneWaveRet, PlaneWaveRetLayer, DipoleRet
-from mnpbem.greenfun import GreenTabLayer
+from GUI.mnpbem.materials import EpsConst, EpsDrude, EpsTable
+from GUI.mnpbem.geometry import trisphere, tricube, ComParticle, LayerStructure
+from GUI.mnpbem.bem import BEMRet, BEMRetLayer
+from GUI.mnpbem.simulation import PlaneWaveRet, PlaneWaveRetLayer, DipoleRet
+from GUI.mnpbem.greenfun import GreenTabLayer
 
 
 _TOL = 1e-5
@@ -58,7 +58,7 @@ def _reload_gpu_module():
     # Force ``mnpbem.utils.gpu`` to re-read the env vars after they change.
     import importlib
 
-    import mnpbem.utils.gpu as _gpu
+    import GUI.mnpbem.utils.gpu as _gpu
     importlib.reload(_gpu)
 
 
@@ -205,9 +205,9 @@ def test_bem_ret_sphere_dipole_no_substrate():
     cpu_ext = []
     for e in enei_list:
         # DipoleRet needs a ComPoint-like wrapper. Use the lightweight wrapper.
-        from mnpbem.greenfun import CompStruct
+        from GUI.mnpbem.greenfun import CompStruct
         # Build minimal compound point as ComParticle-like point.
-        from mnpbem.geometry.compoint import ComPoint
+        from GUI.mnpbem.geometry.compoint import ComPoint
         pt = ComPoint(p, dip_pos)
         exc = DipoleRet(pt)
         sig, _ = bem_cpu.solve(exc.potential(p, e))
@@ -223,7 +223,7 @@ def test_bem_ret_sphere_dipole_no_substrate():
     bem_gpu = BEMRet(p)
     gpu_ext = []
     for e in enei_list:
-        from mnpbem.geometry.compoint import ComPoint
+        from GUI.mnpbem.geometry.compoint import ComPoint
         pt = ComPoint(p, dip_pos)
         exc = DipoleRet(pt)
         sig, _ = bem_gpu.solve(exc.potential(p, e))
@@ -297,7 +297,7 @@ def test_backend_mix_helpers_in_layer_solver():
     # Ensure _backend_align / _sub_mat / _mul_eps don't crash on
     # cupy/numpy mix.  Smoke-only — full behaviour already covered by
     # test_bem_ret_layer_backend.py.
-    from mnpbem.bem.bem_ret_layer import (
+    from GUI.mnpbem.bem.bem_ret_layer import (
             _backend_align, _is_cupy_array, _to_host_safe)
     A = cp.ones((4, 4), dtype = complex)
     B = np.ones((4, 4), dtype = complex)
@@ -376,6 +376,6 @@ def test_bem_ret_disjoint_dimer_nonuniform_eps_native_gpu_uploads_L1():
     # eps1 must be non-scalar diag matrix
     assert not np.isscalar(bem.eps1)
     # L1 should be on device (cupy) since native mode is active
-    from mnpbem.utils.gpu import is_cupy_array
+    from GUI.mnpbem.utils.gpu import is_cupy_array
     assert is_cupy_array(bem.L1), \
             '[error] L1 not on device: type={}'.format(type(bem.L1))

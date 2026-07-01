@@ -8,6 +8,7 @@ from .pages.start import StartPage
 from .pages.simulation import SimulationPage
 from .pages.post_processing import ProcessingPage
 from .widgets.state_dialog import StateDebugDialog
+from .mnpbem.materials import EpsConst, EpsDrude, EpsFun, EpsNonlocal, EpsTable
 # Import all the pages here
 # run with python -m GUI.gui_main from outside the GUI folder
 

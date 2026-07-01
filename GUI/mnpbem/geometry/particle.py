@@ -9,7 +9,7 @@ from scipy.linalg import expm
 from scipy.sparse import csr_matrix, diags
 from ..utils.quadface import QuadFace as QuadFaceNew
 from ..utils.matlab_compat import mcos, msin, matan2, msqrt, masin, macos, mfloor, mceil, mround
-from ..geometry.shape_functions import TriangleShape, QuadShape
+from .shape_functions import TriangleShape, QuadShape
 
 
 # Keep old QuadFace for backward compatibility temporarily

@@ -11,8 +11,8 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from mnpbem.geometry.particle import Particle
-from mnpbem.geometry.mesh_generators import (
+from GUI.mnpbem.geometry.particle import Particle
+from GUI.mnpbem.geometry.mesh_generators import (
     fvgrid,
     trispheresegment,
     trirod,
@@ -20,7 +20,7 @@ from mnpbem.geometry.mesh_generators import (
     tritorus,
     trispherescale,
 )
-from mnpbem.geometry.edgeprofile import EdgeProfile
+from GUI.mnpbem.geometry.edgeprofile import EdgeProfile
 
 
 # ============================================================================

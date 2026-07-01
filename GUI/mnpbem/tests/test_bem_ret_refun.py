@@ -13,10 +13,10 @@ from typing import Any, Tuple
 import numpy as np
 import pytest
 
-from mnpbem.materials import EpsConst, EpsDrude, EpsNonlocal, make_nonlocal_pair
-from mnpbem.geometry import ComParticle, trisphere
-from mnpbem.greenfun import coverlayer
-from mnpbem.bem import BEMRet
+from GUI.mnpbem.materials import EpsConst, EpsDrude, EpsNonlocal, make_nonlocal_pair
+from GUI.mnpbem.geometry import ComParticle, trisphere
+from GUI.mnpbem.greenfun import coverlayer
+from GUI.mnpbem.bem import BEMRet
 
 
 def _build_simple_sphere():

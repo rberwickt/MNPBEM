@@ -26,7 +26,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-from mnpbem import (
+from GUI.mnpbem import (
     EpsConst, EpsTable,
     trisphere, trirod, tricube, tritorus,
     trispheresegment, trispherescale, tripolygon,
