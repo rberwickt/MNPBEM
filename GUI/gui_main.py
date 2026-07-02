@@ -8,7 +8,7 @@ from .pages.start import StartPage
 from .pages.simulation import SimulationPage
 from .pages.post_processing import ProcessingPage
 from .widgets.state_dialog import StateDebugDialog
-from .mnpbem.materials import EpsConst, EpsDrude, EpsFun, EpsNonlocal, EpsTable
+
 # Import all the pages here
 # run with python -m GUI.gui_main from outside the GUI folder
 
@@ -19,13 +19,6 @@ class MainController(QMainWindow):
         super().__init__()
         self.setWindowTitle("PyMNPBEM GUI")
         
-        base_dir = Path(__file__).resolve().parent
-        icon_path = base_dir / "images" / "Landes_group_logo_cropped.png"
-        
-        if icon_path.exists():
-            self.setWindowIcon(QIcon(str(icon_path)))
-        else:
-            print(f"Warning: Icon not found at {icon_path}")
         
         self.resize(800, 700)
 
@@ -66,8 +59,15 @@ class MainController(QMainWindow):
 if __name__ == "__main__":
     app = QApplication(sys.argv) # can probably just leave as [] instead of sys.argv, could have it be the target file directory later?
     # maybe a config file input/address?
-
-    # styling (optional)
+    base_dir = Path(__file__).resolve().parent
+    icon_path = base_dir / "images" / "Landes_group_logo_cropped.png"
+        
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
+    else:
+        print(f"Warning: Icon not found at {icon_path}")
+        
+    # styling 
     base_dir = Path(__file__).resolve().parent
     qss_path = base_dir / "style.qss"
     

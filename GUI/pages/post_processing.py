@@ -1,13 +1,14 @@
 # page_two.py
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QPushButton, QLabel
 from PySide6.QtCore import Signal
+from ..simulation_state import SimulationState
 
 class ProcessingPage(QWidget):
     
 
-    def __init__(self, state_reference):
+    def __init__(self, state: SimulationState):
         super().__init__()
-        self.state = state_reference  # Access to the shared state
+        self.state = state
         
         self.layout = QVBoxLayout(self)
         
