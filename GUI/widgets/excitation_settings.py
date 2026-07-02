@@ -1,6 +1,5 @@
 from PySide6.QtWidgets import (QGroupBox, QFormLayout, QComboBox, QStackedWidget, 
-                               QWidget, QVBoxLayout, QLabel, QHBoxLayout, 
-                               QLineEdit, QDoubleSpinBox, QSpinBox)
+                               QWidget, QVBoxLayout, QHBoxLayout, QDoubleSpinBox, QSpinBox)
 from PySide6.QtCore import Qt, Signal
 #from PySide6.QtGui import QIntValidator
 from ..simulation_state import SimulationState

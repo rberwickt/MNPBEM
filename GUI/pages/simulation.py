@@ -3,6 +3,7 @@ from PySide6.QtCore import Signal
 from ..simulation_state import SimulationState
 from ..widgets.solver_options import SolverOptionsWidget
 from ..widgets.excitation_settings import ExcitationSettingsWidget
+from ..widgets.material_settings import MaterialOptionsWidget
 class SimulationPage(QWidget):
     sim_completed = Signal()  # Alert main.py when simulation finishes
 
@@ -24,15 +25,8 @@ class SimulationPage(QWidget):
 
         self.col_2 = QVBoxLayout()
         
-        self.solver_options2 = SolverOptionsWidget(state)
-        self.col_2.addWidget(self.solver_options2)
-        
-        self.excitation_settings2 = ExcitationSettingsWidget(state)
-        self.col_2.addWidget(self.excitation_settings2)
-
-        self.run_btn2 = QPushButton("Run Simulation", self)
-        self.run_btn2.clicked.connect(self.run_simulation)
-        self.col_2.addWidget(self.run_btn2)
+        self.material_settings = MaterialOptionsWidget(state)
+        self.col_2.addWidget(self.material_settings)
 
         self.columns.addLayout(self.col_1)
         self.columns.addLayout(self.col_2)

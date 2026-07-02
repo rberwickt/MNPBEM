@@ -70,6 +70,10 @@ class StartPage(QWidget):
         calc_group_layout.addWidget(self.calc_display)
         self.displays_layout.addWidget(self.calc_group)
 
+        self.layout.addWidget(QLabel("Non-local pairs not yet supported! (returns more than one callable)"))
+        self.layout.addWidget(QLabel("See user-defined/materials/vacuum.py for example function header"))
+        # could try an elif and name the function in the materials file something different if it returns more than one callable? 
+        #   question for later: will it only ever be 1 or 2 callables returned?
         self.layout.addLayout(self.displays_layout)
 
         self.load_calculations()
