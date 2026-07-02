@@ -1,10 +1,12 @@
 # stores all of the data so that it can be easily passed between screens/functions
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Optional, Callable
 
 @dataclass
 class SimulationState:
-    user_functions: Optional[Any] = None                                # User functions for both materials (EpsFun) and post-processing
+    # Plugin name (str) => A callable that takes a float (enei) 
+    #        and returns a tuple of (complex_eps, float_k)
+    loaded_dielectrics: dict[str, Callable[[float], tuple[complex, float]]] = field(default_factory=dict)
     dat_tables: dict[str, Any] = field(default_factory=dict)            # For materials
     raw_results: Optional[Any] = None                                   # Simulation output (Sigma)
 
