@@ -12,6 +12,9 @@ class SimulationState:
 
     solver: str = "Retarded"
 
+    # Structure (Geometry) Settings ===================================
+    structure: str = "Sphere" # not sure how this will work with multiple structures....
+
     # Material Settings ===============================================
     material_count: int = 0 # should be set to one as soon as the material_settings widget loads
     materials: Optional[Callable[[float], tuple[complex, float]]] = field(default_factory=list)

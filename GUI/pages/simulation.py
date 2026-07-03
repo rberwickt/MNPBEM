@@ -4,6 +4,7 @@ from ..simulation_state import SimulationState
 from ..widgets.solver_options import SolverOptionsWidget
 from ..widgets.excitation_settings import ExcitationSettingsWidget
 from ..widgets.material_settings import MaterialOptionsWidget
+from ..widgets.structure_settings import StructureSettingsWidget
 class SimulationPage(QWidget):
     sim_completed = Signal()  # Alert main.py when simulation finishes
 
@@ -28,6 +29,9 @@ class SimulationPage(QWidget):
         self.material_settings = MaterialOptionsWidget(state)
         self.col_2.addWidget(self.material_settings)
 
+        self.structure_settings = StructureSettingsWidget(state)
+        self.col_2.addWidget(self.structure_settings)
+
         self.columns.addLayout(self.col_1)
         self.columns.addLayout(self.col_2)
 
@@ -36,14 +40,4 @@ class SimulationPage(QWidget):
         pass
 
     def run_simulation(self):
-        # 1. Pull the tables loaded by Page 1
-        tables = self.state.dat_tables
-        
-        # 2. (Run your simulation logic here using tables)
-        sim_results = "Simulation Matrix Output" 
-        
-        # 3. Save results back into the state for Page 3 to use
-        self.state.raw_results = sim_results
-        
-        # 4. Tell the main window we are done
         self.sim_completed.emit()
