@@ -5,6 +5,7 @@ from ..widgets.solver_options import SolverOptionsWidget
 from ..widgets.excitation_settings import ExcitationSettingsWidget
 from ..widgets.material_settings import MaterialOptionsWidget
 from ..widgets.structure_settings import StructureSettingsWidget
+from ..widgets.energy_range import EnergyRangeWidget
 class SimulationPage(QWidget):
     sim_completed = Signal()  # Alert main.py when simulation finishes
 
@@ -19,6 +20,9 @@ class SimulationPage(QWidget):
         
         self.excitation_settings = ExcitationSettingsWidget(state)
         self.col_1.addWidget(self.excitation_settings)
+
+        self.energy_range = EnergyRangeWidget(state)
+        self.col_1.addWidget(self.energy_range)
 
         self.run_btn = QPushButton("Run Simulation", self)
         self.run_btn.clicked.connect(self.run_simulation)

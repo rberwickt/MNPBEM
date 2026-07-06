@@ -12,6 +12,12 @@ class SimulationState:
 
     solver: str = "Retarded"
 
+    # Energy Range Settings ===========================================
+    energy_in_nm: bool = True
+    energy_min: float = 100.0
+    energy_max: float = 400.0
+    energy_steps: int = 10
+
     # Structure (Geometry) Settings ===================================
     structure: str = "Sphere" # not sure how this will work with multiple structures....
 
