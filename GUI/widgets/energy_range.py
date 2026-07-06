@@ -1,11 +1,11 @@
 from PySide6.QtWidgets import (QGroupBox, QFormLayout, QSpinBox, QDoubleSpinBox, QPushButton)
 from ..simulation_state import SimulationState
+from ..mnpbem.misc import EV2NM
 
 class EnergyRangeWidget(QGroupBox):
-    EV_NM_CONSTANT = 1239.8419843320025 # (hc * 10^9) / e
 
     def __init__(self, state: SimulationState, parent=None):
-        super().__init__("Energy Range", parent)
+        super().__init__("Wavelength Range", parent)
         self.state = state
         self.layout = QFormLayout(self)
 
@@ -39,16 +39,18 @@ class EnergyRangeWidget(QGroupBox):
         self.layout.addRow(self.unit_button)
 
     def _convert_units(self): # swap between nm and eV freely
-        self.state.energy_max = self.EV_NM_CONSTANT / self.state.energy_max
-        self.state.energy_min = self.EV_NM_CONSTANT / self.state.energy_min
+        self.state.energy_max = EV2NM / self.state.energy_max
+        self.state.energy_min = EV2NM / self.state.energy_min
 
         if self.state.energy_in_nm: # swap to eV
             self.max_box.setSuffix(" ev")
             self.min_box.setSuffix(" ev")
+            self.setTitle("Energy Range")
             self.unit_button.setText("Change to nm")
         else: # swap to nm
             self.max_box.setSuffix(" nm")
             self.min_box.setSuffix(" nm")
+            self.setTitle("Wavelength Range")
             self.unit_button.setText("Change to eV")
 
         self.min_box.setValue(self.state.energy_min)

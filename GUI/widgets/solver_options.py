@@ -9,9 +9,9 @@ class SolverOptionsWidget(QGroupBox):
         self.state = state
         self.layout = QVBoxLayout(self)
         self.solver_combo = ToolTipComboBox()
-        options = [("Retarded", "Solves for both charge and current"),
-                   ("Quasistatic", "Only solves for current"),
-                   ("Iterative", "Fast but experimental")]
+        options = [("Retarded", "Solves for both charge and current, recommended"),
+                   ("Quasistatic", "Quick, but only solves for charge (May impact post-processing)"),
+                   ("Iterative Retarded", "Faster, but experimental")]
         self.solver_combo.addItemsWithTooltips(options)
         self.solver_combo.currentTextChanged.connect(lambda solver: setattr(self.state, 'solver', solver))
         self.layout.addWidget(self.solver_combo)

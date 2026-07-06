@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import (QGroupBox, QFormLayout, QComboBox, QStackedWidget, 
+from PySide6.QtWidgets import (QGroupBox, QFormLayout, QComboBox, QTabWidget, 
                                QWidget, QVBoxLayout, QHBoxLayout, QDoubleSpinBox, QSpinBox)
 from PySide6.QtCore import Qt, Signal
 #from PySide6.QtGui import QIntValidator
@@ -7,7 +7,7 @@ class StructureSettingsWidget(QGroupBox):
     state_changed = Signal() # Haven't decided if this is going to be a useful signal, 
     #                           but I'll leave it here for now
     def __init__(self, state: SimulationState, parent=None):
-        super().__init__("Structure Setings", parent)
+        super().__init__("Structure Settings", parent)
         self.state = state  # Keep a reference to the data struct
 
         self.layout = QFormLayout(self)
@@ -18,8 +18,6 @@ class StructureSettingsWidget(QGroupBox):
         self.geo_combo.currentTextChanged.connect(self._on_geo_changed)
         self.layout.addRow("Geometry:", self.geo_combo)
 
-        self.stacked_widget = QStackedWidget()
-        self.layout.addRow(self.stacked_widget)
 
         # Sphere Settings =============================================
         # n, diameter=1.0 (faces ~ n, "n must be one of {144, 256, 484, 1024, ...} (precomputed meshes)")
@@ -30,14 +28,8 @@ class StructureSettingsWidget(QGroupBox):
         # Cube Settings ===============================================
         # (n, length=1.0, e=0.25) "n : int per edge, e edge rounding"
 
-        # Torus Settings ==============================================
-        # (diameter, rad, n=None) rad => tube radius (the hole)
 
-        # Ellipsoid Settings ==========================================
-        #   same as sphere but then you run trispherescale(p, scale) <- dont know how scale works yet
-
-
-        # allow for mirroring? (because of ComParticleMirror)
+        # Allow for shells (use a system like the material_dropdown widgets)
 
         # Substrate (layered versions of functions) 
         # layer must be of form: LayerStructure(epstab, ind, z) 	epstab : list[Eps], ind : list[int], z : list[float] 	

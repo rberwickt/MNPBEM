@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import (QGroupBox, QFormLayout, QSpinBox, QScrollArea, QWidget, QVBoxLayout)
+from PySide6.QtWidgets import (QGroupBox, QFormLayout, QSpinBox, QScrollArea, QWidget, QVBoxLayout, QSizePolicy)
 from PySide6.QtCore import Qt
 from ..simulation_state import SimulationState
 from .material_dropdown import MaterialComboBox
@@ -26,7 +26,9 @@ class MaterialOptionsWidget(QGroupBox):
 
         self.mat_scroll = QScrollArea()
         self.mat_scroll.setWidgetResizable(True)  # allows inner widgets to scale
-        self.mat_scroll.setFixedHeight(300)       # fixes the height so it won't grow instead of the inner widgets
+        #self.mat_scroll.setFixedHeight(300)       # fixes the height so it won't grow instead of the inner widgets
+        self.mat_scroll.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Expanding) 
+        # may need to adjust min hint
         self.mat_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.mat_content = QWidget()
         self.mat_layout = QVBoxLayout(self.mat_content)
