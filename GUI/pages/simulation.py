@@ -18,15 +18,12 @@ class SimulationPage(QWidget):
         self.solver_options = SolverOptionsWidget(state)
         self.col_1.addWidget(self.solver_options)
         
-        self.excitation_settings = ExcitationSettingsWidget(state)
-        self.col_1.addWidget(self.excitation_settings)
+        
 
         self.energy_range = EnergyRangeWidget(state)
         self.col_1.addWidget(self.energy_range)
-
-        self.run_btn = QPushButton("Run Simulation", self)
-        self.run_btn.clicked.connect(self.run_simulation)
-        self.col_1.addWidget(self.run_btn)
+        
+        self.col_1.addStretch()
 
         self.col_2 = QVBoxLayout()
         
@@ -36,8 +33,22 @@ class SimulationPage(QWidget):
         self.structure_settings = StructureSettingsWidget(state)
         self.col_2.addWidget(self.structure_settings)
 
+        self.col_2.addStretch()
+
+        self.col_3 = QVBoxLayout()
+
+        self.excitation_settings = ExcitationSettingsWidget(state)
+        self.col_3.addWidget(self.excitation_settings)
+
+        self.run_btn = QPushButton("Run Simulation", self)
+        self.run_btn.clicked.connect(self.run_simulation)
+        self.col_3.addWidget(self.run_btn)
+
+        self.col_3.addStretch()
+
         self.columns.addLayout(self.col_1)
         self.columns.addLayout(self.col_2)
+        self.columns.addLayout(self.col_3)
 
     def setup_ui_from_state(self):
         """Called by main window right before switching to this page"""

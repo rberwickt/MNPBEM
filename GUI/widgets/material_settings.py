@@ -11,7 +11,7 @@ class MaterialOptionsWidget(QGroupBox):
     def __init__(self, state: SimulationState, parent=None):
         super().__init__("Material Selection", parent)
         self.state = state
-        self.layout = QFormLayout(self)
+        self.layout = QVBoxLayout(self)
         self.material_selects = []
 
         # material count select
@@ -20,7 +20,9 @@ class MaterialOptionsWidget(QGroupBox):
         toSet = 1
         if toSet < self.state.material_count: toSet = self.state.material_count
         self.mat_count.setValue(toSet) # should trigger the signal, generating selects
-        self.layout.addRow("Number of Materials:", self.mat_count)
+        mat_label = QFormLayout()
+        mat_label.addRow("Number of Materials:", self.mat_count)
+        self.layout.addLayout(mat_label)
 
         self.mat_scroll = QScrollArea()
         self.mat_scroll.setWidgetResizable(True)  # allows inner widgets to scale

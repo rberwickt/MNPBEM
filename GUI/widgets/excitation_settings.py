@@ -120,9 +120,12 @@ class ExcitationSettingsWidget(QGroupBox):
         self.stacked_widget.addWidget(self.dipole_settings)
 
         # layout
-        layout = QFormLayout(self)
-        layout.addRow(self.source_combo)
-        layout.addRow(self.settings_group)
+        self.layout = QVBoxLayout(self)
+        form_layout = QFormLayout()
+        form_layout.addRow(self.source_combo)
+        form_layout.addRow(self.settings_group)
+        self.layout.addLayout(form_layout)
+        self.layout.addStretch()
         
         # binding all the settings signals
         self.source_combo.currentTextChanged.connect(self._on_source_changed)

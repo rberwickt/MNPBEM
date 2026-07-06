@@ -44,7 +44,7 @@ class StartPage(QWidget):
         # actual GUI of state page
         self.mat_display = QScrollArea()
         self.mat_display.setWidgetResizable(True)  # allows inner widgets to scale
-        self.mat_display.setFixedHeight(300)       # fixes the height so it won't grow instead of the inner widgets
+        #self.mat_display.setFixedHeight(300)       # fixes the height so it won't grow instead of the inner widgets
         self.mat_display.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.mat_content = QWidget()
         self.mat_layout = QVBoxLayout(self.mat_content)
@@ -58,7 +58,7 @@ class StartPage(QWidget):
 
         self.calc_display = QScrollArea()
         self.calc_display.setWidgetResizable(True)  # allows inner widgets to scale
-        self.calc_display.setFixedHeight(300)       # fixes the height so it won't grow instead of the inner widgets
+        #self.calc_display.setFixedHeight(300)       # fixes the height so it won't grow instead of the inner widgets
         self.calc_display.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.calc_content = QWidget()
         self.calc_layout = QVBoxLayout(self.calc_content)
