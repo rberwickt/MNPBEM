@@ -13,10 +13,35 @@ class StructureSettingsWidget(QGroupBox):
         self.layout = QFormLayout(self)
 
         self.geo_combo = QComboBox()
-        self.geo_combo.addItems(["Sphere", "Rod", "Cube", "Torus"])
+        self.geo_combo.addItems(["Sphere", "Rod", "Cube", "Torus", "Ellipsoid"])
         self.geo_combo.setCurrentText(self.state.structure)
         self.geo_combo.currentTextChanged.connect(self._on_geo_changed)
-        self.layout.addRow("Structure:", self.geo_combo)
+        self.layout.addRow("Geometry:", self.geo_combo)
+
+        self.stacked_widget = QStackedWidget()
+        self.layout.addRow(self.stacked_widget)
+
+        # Sphere Settings =============================================
+        # n, diameter=1.0 (faces ~ n, "n must be one of {144, 256, 484, 1024, ...} (precomputed meshes)")
+ 
+        # Rod Settings ================================================
+        # (diameter, height, n=None, triangles=False), little bit confused on n and triangles
+
+        # Cube Settings ===============================================
+        # (n, length=1.0, e=0.25) "n : int per edge, e edge rounding"
+
+        # Torus Settings ==============================================
+        # (diameter, rad, n=None) rad => tube radius (the hole)
+
+        # Ellipsoid Settings ==========================================
+        #   same as sphere but then you run trispherescale(p, scale) <- dont know how scale works yet
+
+
+        # allow for mirroring? (because of ComParticleMirror)
+
+        # Substrate (layered versions of functions) 
+        # layer must be of form: LayerStructure(epstab, ind, z) 	epstab : list[Eps], ind : list[int], z : list[float] 	
+        # Stratified medium definition (z[k] = interface, ind[k] = dielectric index).
 
     def _on_geo_changed(self, text: str):
         self.state.structure = text
