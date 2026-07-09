@@ -4,16 +4,15 @@ from PySide6.QtCore import Qt, Signal
 #from PySide6.QtGui import QIntValidator
 from ..simulation_state import SimulationState
 class ExcitationSettingsWidget(QGroupBox):
-    state_changed = Signal() # Haven't decided if this is going to be a useful signal, but I'll leave it here for now
-    
-    # Number Entry Ranges (if min isn't here, likely is 0)
-    JONES_MIN = -100
-    JONES_MAX = 100
+    # Number Entry Ranges (if min isn't here, likely is 1)
+    PW_POL_MIN = -100
+    PW_POL_MAX = 100
     PW_DIR_MIN = -100
     PW_DIR_MAX = 100
 
-    KINETIC_ENERGY_MAX = 1000000.00
+    BEAM_ENERGY_MAX = 1000000.00 # (eV)
     BEAM_WIDTH_MAX = 100 # (nm)
+    IMPACT_MAX = 100.0 # (nm)
 
     def __init__(self, state: SimulationState, parent=None):
         super().__init__("Excitation Source", parent)
@@ -32,87 +31,130 @@ class ExcitationSettingsWidget(QGroupBox):
         self.plane_wave_settings = QWidget()
         plane_wave_layout = QFormLayout(self.plane_wave_settings)
 
-        self.polarization_combo = QComboBox()
-        self.polarization_combo.addItems(["p", "s", "Polarization Vector", "Polarization Angle"])
-        self.polarization_combo.setCurrentText(self.state.polarization)
-        self.polarization_combo.currentTextChanged.connect(lambda pol: setattr(self.state, 'polarization', pol))
-        plane_wave_layout.addRow("Polarization:", self.polarization_combo)
+        self.pol_vectors = QGroupBox("Polarization and Direction")
+        pol_layout = QHBoxLayout(self.pol_vectors)
 
-        self.jones_vectors = QGroupBox("Jones Vectors and Direction")
-        jones_layout = QHBoxLayout(self.jones_vectors)
-
-        # ex,ey,ez
+        # polarization x,y,z
         left_col = QFormLayout()
-        self.ex = QSpinBox()
-        self.ex.setRange(self.JONES_MIN, self.JONES_MAX)
-        self.ex.setValue(self.state.jones_ex)
-        self.ex.valueChanged.connect(lambda val: setattr(self.state, 'jones_ex', val))
-        left_col.addRow("Ex:", self.ex)
+        self.pol_x = QSpinBox()
+        self.pol_x.setRange(self.PW_POL_MIN, self.PW_POL_MAX)
+        self.pol_x.setValue(self.state.pol_x)
+        self.pol_x.valueChanged.connect(lambda val: setattr(self.state, 'pol_x', val))
+        left_col.addRow("X:", self.pol_x)
 
-        self.ey = QSpinBox()
-        self.ey.setRange(self.JONES_MIN, self.JONES_MAX)
-        self.ey.setValue(self.state.jones_ey)
-        self.ey.valueChanged.connect(lambda val: setattr(self.state, 'jones_ey', val))
-        left_col.addRow("Ey:", self.ey)
+        self.pol_y = QSpinBox()
+        self.pol_y.setRange(self.PW_POL_MIN, self.PW_POL_MAX)
+        self.pol_y.setValue(self.state.pol_y)
+        self.pol_y.valueChanged.connect(lambda val: setattr(self.state, 'pol_y', val))
+        left_col.addRow("Y:", self.pol_y)
 
-        self.ez = QSpinBox()
-        self.ez.setRange(self.JONES_MIN, self.JONES_MAX)
-        self.ez.setValue(self.state.jones_ez)
-        self.ez.valueChanged.connect(lambda val: setattr(self.state, 'jones_ez', val))
-        left_col.addRow("Ez:", self.ez)
+        self.pol_z = QSpinBox()
+        self.pol_z.setRange(self.PW_POL_MIN, self.PW_POL_MAX)
+        self.pol_z.setValue(self.state.pol_z)
+        self.pol_z.valueChanged.connect(lambda val: setattr(self.state, 'pol_z', val))
+        left_col.addRow("Z:", self.pol_z)
 
         # direction
         right_col = QFormLayout()
-        self.dir_x = QSpinBox()
-        self.dir_x.setRange(self.PW_DIR_MIN, self.PW_DIR_MAX)
-        self.dir_x.setValue(self.state.dir_x)
-        self.dir_x.valueChanged.connect(lambda val: setattr(self.state, 'dir_x', val))
-        right_col.addRow("Dir_x:", self.dir_x)
+        self.pw_dir_x = QSpinBox()
+        self.pw_dir_x.setRange(self.PW_DIR_MIN, self.PW_DIR_MAX)
+        self.pw_dir_x.setValue(self.state.pol_dir_x)
+        self.pw_dir_x.valueChanged.connect(lambda val: setattr(self.state, 'pol_dir_x', val))
+        right_col.addRow("DIR_X:", self.pw_dir_x)
         
-        self.dir_y = QSpinBox()
-        self.dir_y.setRange(self.PW_DIR_MIN, self.PW_DIR_MAX)
-        self.dir_y.setValue(self.state.dir_y)
-        self.dir_y.valueChanged.connect(lambda val: setattr(self.state, 'dir_y', val))
-        right_col.addRow("Dir_y:", self.dir_y)
+        self.pw_dir_y = QSpinBox()
+        self.pw_dir_y.setRange(self.PW_DIR_MIN, self.PW_DIR_MAX)
+        self.pw_dir_y.setValue(self.state.pol_dir_y)
+        self.pw_dir_y.valueChanged.connect(lambda val: setattr(self.state, 'pol_dir_y', val))
+        right_col.addRow("DIR_Y:", self.pw_dir_y)
 
-        self.dir_z = QSpinBox()
-        self.dir_z.setRange(self.PW_DIR_MIN, self.PW_DIR_MAX)
-        self.dir_z.setValue(self.state.dir_z)
-        self.dir_z.valueChanged.connect(lambda val: setattr(self.state, 'dir_z', val))
-        right_col.addRow("Dir_z:", self.dir_z)
+        self.pw_dir_z = QSpinBox()
+        self.pw_dir_z.setRange(self.PW_DIR_MIN, self.PW_DIR_MAX)
+        self.pw_dir_z.setValue(self.state.pol_dir_z)
+        self.pw_dir_z.valueChanged.connect(lambda val: setattr(self.state, 'pol_dir_z', val))
+        right_col.addRow("DIR_Z:", self.pw_dir_z)
 
-        jones_layout.addLayout(left_col)
-        jones_layout.addLayout(right_col)
-        plane_wave_layout.addRow(self.jones_vectors)
+        pol_layout.addLayout(left_col)
+        pol_layout.addLayout(right_col)
+        plane_wave_layout.addRow(self.pol_vectors)
 
         # Electron Beam ============================================
         self.beam_settings = QWidget()
         beam_layout = QFormLayout(self.beam_settings)
 
-        self.kinetic_energy = QDoubleSpinBox()
-        self.kinetic_energy.setRange(1.0, self.KINETIC_ENERGY_MAX) 
-        self.kinetic_energy.setDecimals(2)
-        self.kinetic_energy.setSuffix(" eV")
-        self.kinetic_energy.setValue(self.state.kinetic_energy)
-        self.kinetic_energy.valueChanged.connect(lambda val: setattr(self.state, 'kinetic_energy', val))
-        beam_layout.addRow("Kinetic Energy:", self.kinetic_energy)
+        self.beam_energy = QDoubleSpinBox()
+        self.beam_energy.setRange(1.0, self.BEAM_ENERGY_MAX) 
+        self.beam_energy.setDecimals(2)
+        self.beam_energy.setSuffix(" eV")
+        self.beam_energy.setValue(self.state.beam_energy)
+        self.beam_energy.valueChanged.connect(lambda val: setattr(self.state, 'beam_energy', val))
+        beam_layout.addRow("Beam Energy:", self.beam_energy)
 
-        self.beam_width = QSpinBox()
-        self.beam_width.setRange(1, self.BEAM_WIDTH_MAX)
+        self.beam_width = QDoubleSpinBox()
+        self.beam_width.setRange(0.1, self.BEAM_WIDTH_MAX)
         self.beam_width.setSuffix(" nm")
         self.beam_width.setValue(self.state.beam_width)
         self.beam_width.valueChanged.connect(lambda val: setattr(self.state, 'beam_width', val))
         beam_layout.addRow("Beam Width:", self.beam_width)
 
+        self.impact = QDoubleSpinBox()
+        self.impact.setRange(0.5, self.IMPACT_MAX) 
+        self.impact.setDecimals(2)
+        self.impact.setSuffix(" nm")
+        self.impact.setValue(self.state.impact_parameter)
+        self.impact.valueChanged.connect(lambda val: setattr(self.state, 'impact_parameter', val))
+        beam_layout.addRow("Impact Parameter:", self.impact)
+
         # Dipole ===================================================
         self.dipole_settings = QWidget()
         dipole_layout = QFormLayout(self.dipole_settings)
 
-        self.oscillation_combo = QComboBox()
-        self.oscillation_combo.addItems(["x", "y", "z"])
-        self.oscillation_combo.setCurrentText(self.state.oscillation_dir)
-        self.oscillation_combo.currentTextChanged.connect(lambda pol: setattr(self.state, 'oscillation_dir', pol))
-        dipole_layout.addRow("Oscillation Direction:", self.oscillation_combo)
+        self.dip_vectors = QGroupBox("Position and Dipole Moment")
+        vec_layout = QHBoxLayout(self.dip_vectors)
+
+        # moment
+        left_col2 = QFormLayout()
+        self.moment_x = QSpinBox()
+        self.moment_x.setRange(self.PW_POL_MIN, self.PW_POL_MAX) # reusing for now
+        self.moment_x.setValue(self.state.dipole_moment_x)
+        self.moment_x.valueChanged.connect(lambda val: setattr(self.state, 'dipole_moment_x', val))
+        left_col2.addRow("X:", self.moment_x)
+
+        self.moment_y = QSpinBox()
+        self.moment_y.setRange(self.PW_POL_MIN, self.PW_POL_MAX)
+        self.moment_y.setValue(self.state.dipole_moment_y)
+        self.moment_y.valueChanged.connect(lambda val: setattr(self.state, 'dipole_moment_y', val))
+        left_col2.addRow("Y:", self.moment_y)
+
+        self.moment_z = QSpinBox()
+        self.moment_z.setRange(self.PW_POL_MIN, self.PW_POL_MAX)
+        self.moment_z.setValue(self.state.dipole_moment_z)
+        self.moment_z.valueChanged.connect(lambda val: setattr(self.state, 'dipole_moment_z', val))
+        left_col2.addRow("Z:", self.moment_z)
+
+        # position
+        right_col2 = QFormLayout()
+        self.dip_pos_x = QSpinBox()
+        self.dip_pos_x.setRange(self.PW_DIR_MIN, self.PW_DIR_MAX)
+        self.dip_pos_x.setValue(self.state.dipole_pos_x)
+        self.dip_pos_x.valueChanged.connect(lambda val: setattr(self.state, 'dipole_pos_x', val))
+        right_col2.addRow("POS_X:", self.dip_pos_x)
+        
+        self.dip_pos_y = QSpinBox()
+        self.dip_pos_y.setRange(self.PW_DIR_MIN, self.PW_DIR_MAX)
+        self.dip_pos_y.setValue(self.state.dipole_pos_y)
+        self.dip_pos_y.valueChanged.connect(lambda val: setattr(self.state, 'dipole_pos_y', val))
+        right_col2.addRow("POS_Y:", self.dip_pos_y)
+
+        self.dip_pos_z = QSpinBox()
+        self.dip_pos_z.setRange(self.PW_DIR_MIN, self.PW_DIR_MAX)
+        self.dip_pos_z.setValue(self.state.dipole_pos_z)
+        self.dip_pos_z.valueChanged.connect(lambda val: setattr(self.state, 'dipole_pos_z', val))
+        right_col2.addRow("POS_Z:", self.dip_pos_z)
+
+        vec_layout.addLayout(left_col2)
+        vec_layout.addLayout(right_col2)
+        dipole_layout.addRow(self.dip_vectors)
 
         
         self.stacked_widget.addWidget(self.plane_wave_settings)
@@ -146,4 +188,3 @@ class ExcitationSettingsWidget(QGroupBox):
             self.settings_group.setTitle("Excitation Settings (Dipole)")
             self.stacked_widget.setCurrentIndex(2)
             setattr(self.state, 'excitation_source', "Dipole")
-        self.state_changed.emit()

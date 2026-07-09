@@ -16,6 +16,7 @@ dist/
 build/
 .vscode/
 
+GUI/temp_sim.py
 # allow gui images through
 !/GUI/
 !/GUI/images/
