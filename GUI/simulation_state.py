@@ -1,7 +1,7 @@
 # stores all of the data so that it can be easily passed between screens/functions
 from dataclasses import dataclass, field
 from typing import Any, Optional, Callable, Dict
-from .mnpbem.misc import EV2NM
+from ..mnpbem.misc import EV2NM
 import traceback
 from pathlib import Path
 import threading
