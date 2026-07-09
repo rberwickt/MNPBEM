@@ -12,10 +12,10 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from GUI.mnpbem.misc.bemplot import BemPlot
-from GUI.mnpbem.misc.vecarray import VecArray, _cone_plot
-from GUI.mnpbem.misc.valarray import ValArray
-from GUI.mnpbem.misc.plotting import arrowplot, coneplot, coneplot2, mycolormap
+from mnpbem.misc.bemplot import BemPlot
+from mnpbem.misc.vecarray import VecArray, _cone_plot
+from mnpbem.misc.valarray import ValArray
+from mnpbem.misc.plotting import arrowplot, coneplot, coneplot2, mycolormap
 
 
 # ============================================================================

@@ -20,12 +20,12 @@ def _build(env_value, n_faces, multi = False):
     else:
         os.environ['MNPBEM_NUMBA'] = env_value
 
-    from GUI.mnpbem.greenfun import _numba_kernels
+    from mnpbem.greenfun import _numba_kernels
     importlib.reload(_numba_kernels)
-    from GUI.mnpbem.greenfun import compgreen_stat as _cgs_mod
+    from mnpbem.greenfun import compgreen_stat as _cgs_mod
     importlib.reload(_cgs_mod)
 
-    from GUI.mnpbem import trisphere, EpsConst, ComParticle
+    from mnpbem import trisphere, EpsConst, ComParticle
 
     eps = [EpsConst(1.0), EpsConst(4.0)]
 
@@ -73,7 +73,7 @@ def test_closed_surface_multi_particle():
 
 def test_closedparticle_loc_matches_identity():
     """For ``closed = [1]`` over a single particle, ``loc`` must be identity."""
-    from GUI.mnpbem import trisphere, EpsConst, ComParticle
+    from mnpbem import trisphere, EpsConst, ComParticle
 
     p = trisphere(144, 10.0)
     cp = ComParticle([EpsConst(1.0), EpsConst(2.0)], [p], [[2, 1]], 1)

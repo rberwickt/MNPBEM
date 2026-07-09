@@ -3,7 +3,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QPushButton, QLabel, QScroll
 from PySide6.QtCore import Signal, QFileSystemWatcher, QUrl, Qt
 from PySide6.QtGui import QDesktopServices
 from ..simulation_state import SimulationState
-from ..mnpbem.materials.eps_table import EpsTable
+from ...mnpbem.materials.eps_table import EpsTable
 from pathlib import Path
 import importlib, sys
 class StartPage(QWidget):

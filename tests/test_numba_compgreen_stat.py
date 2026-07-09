@@ -18,12 +18,12 @@ def _build_compgreen(env_value, n_faces):
 
     # Force the kernels module (and thus numba_enabled cache state) to
     # re-evaluate the env var on every call.
-    from GUI.mnpbem.greenfun import _numba_kernels
+    from mnpbem.greenfun import _numba_kernels
     importlib.reload(_numba_kernels)
-    from GUI.mnpbem.greenfun import compgreen_stat as _cgs_mod
+    from mnpbem.greenfun import compgreen_stat as _cgs_mod
     importlib.reload(_cgs_mod)
 
-    from GUI.mnpbem import trisphere, EpsConst, ComParticle
+    from mnpbem import trisphere, EpsConst, ComParticle
 
     eps = [EpsConst(1.0), EpsConst(2.0)]
     p = trisphere(n_faces, 10.0)
@@ -52,9 +52,9 @@ def test_numba_matches_numpy_G_F(n_faces):
 
 def test_numba_matches_numpy_Gp_cart():
     """Also verify Gp matches when deriv == 'cart'."""
-    from GUI.mnpbem import trisphere, EpsConst, ComParticle
-    from GUI.mnpbem.greenfun import _numba_kernels
-    from GUI.mnpbem.greenfun import compgreen_stat as _cgs_mod
+    from mnpbem import trisphere, EpsConst, ComParticle
+    from mnpbem.greenfun import _numba_kernels
+    from mnpbem.greenfun import compgreen_stat as _cgs_mod
 
     n_faces = 144
 

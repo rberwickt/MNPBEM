@@ -65,7 +65,7 @@ def _resolve_bem_class(bem_class_name: Optional[str]) -> Any:
     # class reference reliably across all setups.  Pass the BEM solver as
     # a string ('BEMRet', 'BEMRetIter', 'BEMRetLayer', 'BEMRetLayerIter')
     # and resolve it inside the worker after MNPBEM_GPU has been set.
-    from GUI.mnpbem import bem as _bem_pkg
+    from mnpbem import bem as _bem_pkg
 
     if bem_class_name is None or bem_class_name == 'BEMRet':
         return _bem_pkg.BEMRet
@@ -95,7 +95,7 @@ def _worker(gpu_idx: int,
     os.environ.setdefault('MNPBEM_NUMBA', '1')
 
     try:
-        from GUI.mnpbem.simulation import PlaneWaveRet
+        from mnpbem.simulation import PlaneWaveRet
 
         BEMClass = _resolve_bem_class(bem_class_name)
 

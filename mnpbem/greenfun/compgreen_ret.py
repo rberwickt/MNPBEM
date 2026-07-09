@@ -8,7 +8,7 @@ MATLAB: Greenfun/@compgreenret/
 import numpy as np
 from typing import Optional, Tuple, Any, List
 
-from GUI.mnpbem.utils.matlab_compat import msqrt
+from mnpbem.utils.matlab_compat import msqrt
 
 
 class CompGreenRet(object):

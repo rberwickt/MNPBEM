@@ -39,8 +39,8 @@ def _two_cluster_points(n1: int = 16, n2: int = 16,
 def _build_cpu_hmatrix(pos: np.ndarray,
         complex_kernel: bool = True) -> Tuple[Any, np.ndarray]:
 
-    from GUI.mnpbem.greenfun.clustertree import ClusterTree
-    from GUI.mnpbem.greenfun.hmatrix import HMatrix
+    from mnpbem.greenfun.clustertree import ClusterTree
+    from mnpbem.greenfun.hmatrix import HMatrix
 
     tree = ClusterTree(pos, cleaf = 8)
 
@@ -219,9 +219,9 @@ def test_bemretiter_init_precond_gpu_completes():
     # native GPU path (~2884 face trisphere @ default GPU thresholds).
     os.environ.setdefault('MNPBEM_GPU_NATIVE', '1')
 
-    from GUI.mnpbem.geometry import ComParticle, trisphere
-    from GUI.mnpbem.materials import EpsConst, EpsDrude
-    from GUI.mnpbem.bem import BEMRetIter
+    from mnpbem.geometry import ComParticle, trisphere
+    from mnpbem.materials import EpsConst, EpsDrude
+    from mnpbem.bem import BEMRetIter
 
     eps_b = EpsConst(1.0)
     eps_m = EpsDrude.gold()

@@ -7,7 +7,7 @@ MATLAB: Greenfun/@greenstat/
 import numpy as np
 from typing import Optional, Tuple, Any, List, Union
 
-from GUI.mnpbem.utils.matlab_compat import msqrt
+from mnpbem.utils.matlab_compat import msqrt
 
 
 class GreenStat(object):

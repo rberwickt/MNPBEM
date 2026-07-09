@@ -29,7 +29,7 @@ def _have_multi_gpu() -> bool:
             return False
     except Exception:
         return False
-    from GUI.mnpbem.utils.multi_gpu_lu import cusolvermg_available
+    from mnpbem.utils.multi_gpu_lu import cusolvermg_available
     return cusolvermg_available()
 
 
@@ -53,7 +53,7 @@ def _cpu_solve(A, B):
 
 
 def test_multi_gpu_lu_handle_factor_solve_2gpu():
-    from GUI.mnpbem.utils.multi_gpu_lu import MultiGPULU
+    from mnpbem.utils.multi_gpu_lu import MultiGPULU
 
     N = 1024
     A, B = _make_test_problem(N)
@@ -71,7 +71,7 @@ def test_multi_gpu_lu_handle_factor_solve_2gpu():
 def test_multi_gpu_lu_dispatch_kwarg():
     """lu_factor_dispatch with n_gpus=2 should produce 'mgpu' tag."""
 
-    from GUI.mnpbem.utils.gpu import lu_factor_dispatch, lu_solve_dispatch
+    from mnpbem.utils.gpu import lu_factor_dispatch, lu_solve_dispatch
 
     N = 512
     A, B = _make_test_problem(N)
@@ -89,7 +89,7 @@ def test_multi_gpu_lu_dispatch_kwarg():
 def test_multi_gpu_lu_dispatch_fallback_when_n_gpus_one():
     """n_gpus=1 must NOT route to mgpu (preserves legacy behavior)."""
 
-    from GUI.mnpbem.utils.gpu import lu_factor_dispatch
+    from mnpbem.utils.gpu import lu_factor_dispatch
     N = 256
     A, _ = _make_test_problem(N)
     pkg = lu_factor_dispatch(A.copy(), n_gpus = 1)
@@ -104,7 +104,7 @@ def test_multi_gpu_lu_4gpu_when_available():
     except Exception:
         pytest.skip('cupy unavailable')
 
-    from GUI.mnpbem.utils.multi_gpu_lu import MultiGPULU
+    from mnpbem.utils.multi_gpu_lu import MultiGPULU
     N = 2048
     A, B = _make_test_problem(N, nrhs = 4)
     X_cpu = _cpu_solve(A, B)
@@ -137,7 +137,7 @@ def test_multi_gpu_lu_residual_real_double():
             'cuSolverMg dgetrf has a known cross-call regression — '
             'set MNPBEM_VRAM_REAL_FORCE=1 to attempt anyway')
 
-    from GUI.mnpbem.utils.multi_gpu_lu import MultiGPULU
+    from mnpbem.utils.multi_gpu_lu import MultiGPULU
 
     rng = np.random.default_rng(7)
     N = 1024
@@ -164,7 +164,7 @@ def test_multi_gpu_lu_benchmark_n10000():
     if os.environ.get('MNPBEM_BENCH_VRAM_SHARE', '0') != '1':
         pytest.skip('set MNPBEM_BENCH_VRAM_SHARE=1 to run')
 
-    from GUI.mnpbem.utils.multi_gpu_lu import MultiGPULU
+    from mnpbem.utils.multi_gpu_lu import MultiGPULU
 
     N = 10000
     A, B = _make_test_problem(N, nrhs = 4)

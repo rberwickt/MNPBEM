@@ -12,7 +12,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-from GUI.mnpbem.geometry.polygon import Polygon
+from mnpbem.geometry.polygon import Polygon
 
 
 TOL = 1e-10

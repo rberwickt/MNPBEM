@@ -6,7 +6,7 @@ from typing import List, Dict, Tuple, Optional, Union, Any, Callable
 
 import numpy as np
 
-from GUI.mnpbem.utils.matlab_compat import msqrt
+from mnpbem.utils.matlab_compat import msqrt
 
 from .compgreen_stat import CompGreenStat, CompStruct
 

@@ -16,11 +16,11 @@ Main modules:
 __version__ = "1.7.2"
 
 # Materials: dielectric functions
-from GUI.mnpbem.bem import BEMIter, BEMLayerMirror, BEMRet, BEMRetIter, BEMRetLayer, BEMRetLayerIter, BEMRetMirror, BEMStat, BEMStatEig, BEMStatEigMirror, BEMStatIter, BEMStatLayer, BEMStatMirror
-from GUI.mnpbem.geometry import ComParticle, ComParticleMirror, ComPoint, CompStructMirror, EdgeProfile, Particle, Point, Polygon, Polygon3, fvgrid, tricube, tripolygon, trirod, trisphere, trispherescale, trispheresegment, tritorus
-from GUI.mnpbem.greenfun import ACACompGreenRet, ACACompGreenRetLayer, ACACompGreenStat, ClusterTree, CompGreenRet, CompGreenRetLayer, CompGreenRetMirror, CompGreenStat, CompGreenStatLayer, CompGreenStatMirror, CompGreenTabLayer, CompStruct, GreenRetLayer, GreenStat, GreenTabLayer, HMatrix
-from GUI.mnpbem.materials import EpsConst, EpsDrude, EpsFun, EpsNonlocal, EpsTable, make_nonlocal_pair
-from GUI.mnpbem.mie import MieGans, MieRet, MieStat, spharm, sphtable, vecspharm
+from mnpbem.bem import BEMIter, BEMLayerMirror, BEMRet, BEMRetIter, BEMRetLayer, BEMRetLayerIter, BEMRetMirror, BEMStat, BEMStatEig, BEMStatEigMirror, BEMStatIter, BEMStatLayer, BEMStatMirror
+from mnpbem.geometry import ComParticle, ComParticleMirror, ComPoint, CompStructMirror, EdgeProfile, Particle, Point, Polygon, Polygon3, fvgrid, tricube, tripolygon, trirod, trisphere, trispherescale, trispheresegment, tritorus
+from mnpbem.greenfun import ACACompGreenRet, ACACompGreenRetLayer, ACACompGreenStat, ClusterTree, CompGreenRet, CompGreenRetLayer, CompGreenRetMirror, CompGreenStat, CompGreenStatLayer, CompGreenStatMirror, CompGreenTabLayer, CompStruct, GreenRetLayer, GreenStat, GreenTabLayer, HMatrix
+from mnpbem.materials import EpsConst, EpsDrude, EpsFun, EpsNonlocal, EpsTable, make_nonlocal_pair
+from mnpbem.mie import MieGans, MieRet, MieStat, spharm, sphtable, vecspharm
 
 from .materials import epsfun
 

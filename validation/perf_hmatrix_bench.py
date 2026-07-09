@@ -26,12 +26,12 @@ import numpy as np
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
-from GUI.mnpbem.materials import EpsConst, EpsDrude
-from GUI.mnpbem.geometry import trisphere, ComParticle
-from GUI.mnpbem.greenfun import CompGreenStat
-from GUI.mnpbem.greenfun.aca_compgreen_stat import ACACompGreenStat
-from GUI.mnpbem.bem import BEMStat
-from GUI.mnpbem.simulation import PlaneWaveStat
+from mnpbem.materials import EpsConst, EpsDrude
+from mnpbem.geometry import trisphere, ComParticle
+from mnpbem.greenfun import CompGreenStat
+from mnpbem.greenfun.aca_compgreen_stat import ACACompGreenStat
+from mnpbem.bem import BEMStat
+from mnpbem.simulation import PlaneWaveStat
 
 
 def _make_sphere(n_faces, radius = 10.0):
@@ -82,7 +82,7 @@ def _bem_aca(p, enei = 600.0, pol = (1.0, 0.0, 0.0), htol = 1e-10):
     sig_vals = lu_solve(lu_pack, pot.phip)
     t_solve = time.perf_counter() - t0
 
-    from GUI.mnpbem.greenfun.compgreen_stat import CompStruct
+    from mnpbem.greenfun.compgreen_stat import CompStruct
     sig = CompStruct(p, enei, sig = sig_vals)
     ext = float(np.real(exc.extinction(sig)))
 

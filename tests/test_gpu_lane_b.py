@@ -14,8 +14,8 @@ import pytest
 
 
 def _setup_dimer():
-    from GUI.mnpbem.materials import EpsConst, EpsTable
-    from GUI.mnpbem.geometry import tricube, ComParticle
+    from mnpbem.materials import EpsConst, EpsTable
+    from mnpbem.geometry import tricube, ComParticle
     cube1 = tricube(24, 47, e = 0.2, refine = 2); cube1.shift([-24, 0, 0])
     cube2 = tricube(24, 47, e = 0.2, refine = 2); cube2.shift([+24, 0, 0])
     epstab = [EpsConst(1.33 ** 2), EpsTable('gold.dat')]
@@ -25,7 +25,7 @@ def _setup_dimer():
 
 
 def _toggle_gpu(use_gpu):
-    import GUI.mnpbem.utils.gpu as gmod
+    import mnpbem.utils.gpu as gmod
     gmod.USE_GPU = bool(use_gpu)
 
 
@@ -37,7 +37,7 @@ def test_planewave_potential_cpu_vs_gpu():
 
     os.environ['MNPBEM_NUMBA'] = '1'
     p = _setup_dimer()
-    from GUI.mnpbem.simulation import PlaneWaveRet
+    from mnpbem.simulation import PlaneWaveRet
 
     _toggle_gpu(False)
     exc = PlaneWaveRet([[1, 0, 0], [0, 1, 0]], [[0, 0, 1], [0, 0, 1]])
@@ -62,8 +62,8 @@ def test_spectrum_farfield_scattering_cpu_vs_gpu():
 
     os.environ['MNPBEM_NUMBA'] = '1'
     p = _setup_dimer()
-    from GUI.mnpbem.bem import BEMRet
-    from GUI.mnpbem.simulation import PlaneWaveRet
+    from mnpbem.bem import BEMRet
+    from mnpbem.simulation import PlaneWaveRet
 
     bem = BEMRet(p)
 
@@ -92,7 +92,7 @@ def test_epstable_cupy_input_matches_numpy():
         import cupy as cp
     except ImportError:
         pytest.skip("cupy not installed")
-    from GUI.mnpbem.materials import EpsTable
+    from mnpbem.materials import EpsTable
     e = EpsTable('gold.dat')
 
     wls = np.linspace(500, 1000, 10)

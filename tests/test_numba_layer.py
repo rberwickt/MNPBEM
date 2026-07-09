@@ -22,7 +22,7 @@ def _set_numba(flag: bool):
 
 
 def test_trilinear_complex_matches_rgi():
-    from GUI.mnpbem.greenfun._numba_layer import trilinear_complex, _HAS_NUMBA
+    from mnpbem.greenfun._numba_layer import trilinear_complex, _HAS_NUMBA
     if not _HAS_NUMBA:
         pytest.skip('numba not installed')
 
@@ -51,7 +51,7 @@ def test_trilinear_complex_matches_rgi():
 
 
 def test_bilinear_complex_matches_rgi():
-    from GUI.mnpbem.greenfun._numba_layer import trilinear_complex, _HAS_NUMBA
+    from mnpbem.greenfun._numba_layer import trilinear_complex, _HAS_NUMBA
     if not _HAS_NUMBA:
         pytest.skip('numba not installed')
 
@@ -74,9 +74,9 @@ def test_bilinear_complex_matches_rgi():
 
 
 def _build_stat_layer_G(flag):
-    from GUI.mnpbem.materials import EpsConst
-    from GUI.mnpbem.geometry import trisphere, ComParticle, LayerStructure
-    from GUI.mnpbem.greenfun import CompGreenStatLayer
+    from mnpbem.materials import EpsConst
+    from mnpbem.geometry import trisphere, ComParticle, LayerStructure
+    from mnpbem.greenfun import CompGreenStatLayer
 
     epstab = [EpsConst(1.0), EpsConst(2.25)]
     layer = LayerStructure(epstab, [1, 2], [0.0])
@@ -102,9 +102,9 @@ def test_layer_stat_numba_match():
 
 
 def _build_ret_layer_Gout(flag):
-    from GUI.mnpbem.materials import EpsConst, EpsTable
-    from GUI.mnpbem.geometry import trisphere, ComParticle, LayerStructure
-    from GUI.mnpbem.greenfun import CompGreenRetLayer, GreenTabLayer
+    from mnpbem.materials import EpsConst, EpsTable
+    from mnpbem.geometry import trisphere, ComParticle, LayerStructure
+    from mnpbem.greenfun import CompGreenRetLayer, GreenTabLayer
 
     epstab = [EpsConst(1.0), EpsTable('gold.dat'), EpsConst(2.25)]
     layer = LayerStructure(epstab, [1, 3], [0.0])

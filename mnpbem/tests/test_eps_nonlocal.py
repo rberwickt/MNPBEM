@@ -6,10 +6,10 @@ dielectric function (Yu Luo et al., PRL 111, 093901 (2013)).
 import numpy as np
 import pytest
 
-from GUI.mnpbem.materials import (
+from mnpbem.materials import (
     EpsConst, EpsDrude, EpsTable, EpsFun, EpsNonlocal, make_nonlocal_pair,
 )
-from GUI.mnpbem.utils.constants import EV2NM
+from mnpbem.utils.constants import EV2NM
 
 
 def test_gold_factory_basic():
@@ -175,7 +175,7 @@ def test_repr_and_str():
 
 def test_top_level_export_available():
     """EpsNonlocal must be importable from the top-level `mnpbem` package."""
-    import GUI.mnpbem as mnpbem
+    import mnpbem as mnpbem
     assert hasattr(mnpbem, 'EpsNonlocal')
     assert hasattr(mnpbem, 'make_nonlocal_pair')
 
@@ -230,8 +230,8 @@ def test_shell_eps_combined_with_coverlayer_in_comparticle():
     shifted cover layer using EpsNonlocal — instantiate ComParticle and
     verify epstab indexing is sane.
     """
-    from GUI.mnpbem.geometry import ComParticle, trisphere
-    from GUI.mnpbem.greenfun import coverlayer
+    from mnpbem.geometry import ComParticle, trisphere
+    from mnpbem.greenfun import coverlayer
 
     eps_b = EpsConst(1.0)
     core_eps, shell_eps = make_nonlocal_pair('gold',

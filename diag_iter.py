@@ -16,10 +16,10 @@ import numpy as np
 # Ensure we use the worktree mnpbem
 sys.path.insert(0, '/home/yoojk20/scratch/v151_beta_iter_drift')
 
-from GUI.mnpbem.materials import EpsConst, EpsTable
-from GUI.mnpbem.geometry import trisphere, ComParticle
-from GUI.mnpbem.bem import BEMRet, BEMRetIter
-from GUI.mnpbem.simulation import PlaneWaveRet
+from mnpbem.materials import EpsConst, EpsTable
+from mnpbem.geometry import trisphere, ComParticle
+from mnpbem.bem import BEMRet, BEMRetIter
+from mnpbem.simulation import PlaneWaveRet
 
 
 def build_auag_case():

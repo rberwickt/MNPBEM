@@ -58,16 +58,16 @@ def gpu_count():
 def build_particle():
     """Factory used by the multi-GPU dispatcher (must be picklable in
     spawned subprocesses)."""
-    from GUI.mnpbem.materials import EpsConst, EpsTable
-    from GUI.mnpbem.geometry import trisphere, ComParticle
+    from mnpbem.materials import EpsConst, EpsTable
+    from mnpbem.geometry import trisphere, ComParticle
     epstab = [EpsConst(1.0), EpsTable("gold.dat")]
     return ComParticle(epstab, [trisphere(144, 20.0)],
                        [[2, 1]], 1, interp="curv")
 
 
 def run_cpu(enei):
-    from GUI.mnpbem.bem import BEMRet
-    from GUI.mnpbem.simulation import PlaneWaveRet
+    from mnpbem.bem import BEMRet
+    from mnpbem.simulation import PlaneWaveRet
     p = build_particle()
     bem = BEMRet(p)
     exc = PlaneWaveRet(np.array([[1.0, 0.0, 0.0]]),
@@ -82,7 +82,7 @@ def run_cpu(enei):
 
 
 def run_multigpu(enei, n_gpus):
-    from GUI.mnpbem.utils.multi_gpu import solve_spectrum_multi_gpu
+    from mnpbem.utils.multi_gpu import solve_spectrum_multi_gpu
     res = solve_spectrum_multi_gpu(
         particle_factory=build_particle,
         enei=enei,

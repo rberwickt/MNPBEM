@@ -6,7 +6,7 @@ from typing import List, Dict, Tuple, Optional, Union, Any, Callable
 import numpy as np
 from scipy.sparse import csr_matrix, coo_matrix
 
-from GUI.mnpbem.utils.matlab_compat import mlinspace, msqrt
+from mnpbem.utils.matlab_compat import mlinspace, msqrt
 
 from .greentab_layer import GreenTabLayer
 from .refine_utils import refinematrixlayer

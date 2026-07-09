@@ -45,7 +45,7 @@ def _isolate_gpu_env(monkeypatch):
 # -- common fixture: tiny sphere + BEM -------------------------------------
 
 def _build_sphere_problem(sim):
-    from GUI.mnpbem import EpsDrude, EpsConst, trisphere, ComParticle, BEMStat, BEMRet
+    from mnpbem import EpsDrude, EpsConst, trisphere, ComParticle, BEMStat, BEMRet
 
     eps_in = EpsDrude(9.5, 138.0, 138.0)
     eps_out = EpsConst(1.0)
@@ -73,12 +73,12 @@ def _cupy_clone(arr):
 
 
 def _to_cupy_compstruct_stat(sig_cpu):
-    from GUI.mnpbem.greenfun import CompStruct
+    from mnpbem.greenfun import CompStruct
     return CompStruct(sig_cpu.p, sig_cpu.enei, sig = _cupy_clone(sig_cpu.sig))
 
 
 def _to_cupy_compstruct_ret(sig_cpu):
-    from GUI.mnpbem.greenfun import CompStruct
+    from mnpbem.greenfun import CompStruct
     return CompStruct(sig_cpu.p, sig_cpu.enei,
         sig1 = _cupy_clone(sig_cpu.sig1),
         sig2 = _cupy_clone(sig_cpu.sig2),
@@ -100,7 +100,7 @@ def _assert_host_finite(val, ctx = ''):
 @cupy_required
 @pytest.mark.parametrize('wl', [520.0, 600.0, 700.0])
 def test_planewave_stat_cupy_sig_matches_cpu(wl):
-    from GUI.mnpbem.simulation import PlaneWaveStat
+    from mnpbem.simulation import PlaneWaveStat
 
     p, bem = _build_sphere_problem('stat')
     exc = PlaneWaveStat(np.array([1.0, 0.0, 0.0]))
@@ -129,7 +129,7 @@ def test_planewave_stat_cupy_sig_matches_cpu(wl):
 @cupy_required
 @pytest.mark.parametrize('wl', [520.0, 600.0, 700.0])
 def test_planewave_ret_cupy_sig_matches_cpu(wl):
-    from GUI.mnpbem.simulation import PlaneWaveRet
+    from mnpbem.simulation import PlaneWaveRet
 
     p, bem = _build_sphere_problem('ret')
     exc = PlaneWaveRet(np.array([1.0, 0.0, 0.0]), np.array([0.0, 0.0, 1.0]))
@@ -157,8 +157,8 @@ def test_planewave_ret_cupy_sig_matches_cpu(wl):
 
 @cupy_required
 def test_dipole_stat_cupy_sig_matches_cpu():
-    from GUI.mnpbem.simulation import DipoleStat
-    from GUI.mnpbem import ComPoint
+    from mnpbem.simulation import DipoleStat
+    from mnpbem import ComPoint
 
     p, bem = _build_sphere_problem('stat')
     pt = ComPoint(p, np.array([[0.0, 0.0, 15.0]]))
@@ -179,8 +179,8 @@ def test_dipole_stat_cupy_sig_matches_cpu():
 
 @cupy_required
 def test_dipole_ret_cupy_sig_matches_cpu():
-    from GUI.mnpbem.simulation import DipoleRet
-    from GUI.mnpbem import ComPoint
+    from mnpbem.simulation import DipoleRet
+    from mnpbem import ComPoint
 
     p, bem = _build_sphere_problem('ret')
     pt = ComPoint(p, np.array([[0.0, 0.0, 15.0]]))
@@ -204,7 +204,7 @@ def test_dipole_ret_cupy_sig_matches_cpu():
 
 @cupy_required
 def test_eels_stat_cupy_sig_matches_cpu():
-    from GUI.mnpbem.simulation import EELSStat
+    from mnpbem.simulation import EELSStat
 
     p, bem = _build_sphere_problem('stat')
     impact = np.array([[12.0, 0.0]])
@@ -225,7 +225,7 @@ def test_eels_stat_cupy_sig_matches_cpu():
 
 @cupy_required
 def test_eels_ret_cupy_sig_matches_cpu():
-    from GUI.mnpbem.simulation import EELSRet
+    from mnpbem.simulation import EELSRet
 
     p, bem = _build_sphere_problem('ret')
     impact = np.array([[12.0, 0.0]])

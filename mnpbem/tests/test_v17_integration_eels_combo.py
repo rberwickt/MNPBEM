@@ -42,7 +42,7 @@ def _cupy_clone(arr):
 
 
 def _to_cupy_compstruct_ret(sig_cpu):
-    from GUI.mnpbem.greenfun import CompStruct
+    from mnpbem.greenfun import CompStruct
     return CompStruct(sig_cpu.p, sig_cpu.enei,
         sig1 = _cupy_clone(sig_cpu.sig1),
         sig2 = _cupy_clone(sig_cpu.sig2),
@@ -51,7 +51,7 @@ def _to_cupy_compstruct_ret(sig_cpu):
 
 
 def _to_cupy_compstruct_stat(sig_cpu):
-    from GUI.mnpbem.greenfun import CompStruct
+    from mnpbem.greenfun import CompStruct
     return CompStruct(sig_cpu.p, sig_cpu.enei,
         sig = _cupy_clone(sig_cpu.sig))
 
@@ -74,9 +74,9 @@ def _assert_close(cpu, gpu, tol = 1e-5, ctx = ''):
 # -- EELSRet + BEMRetLayer (dielectric substrate) --------------------------
 
 def _build_layer_problem():
-    from GUI.mnpbem import EpsDrude, EpsConst, trisphere, ComParticle
-    from GUI.mnpbem.geometry import LayerStructure
-    from GUI.mnpbem.bem.bem_ret_layer import BEMRetLayer
+    from mnpbem import EpsDrude, EpsConst, trisphere, ComParticle
+    from mnpbem.geometry import LayerStructure
+    from mnpbem.bem.bem_ret_layer import BEMRetLayer
 
     eps_au = EpsDrude(9.5, 138.0, 138.0)
     eps_med = EpsConst(1.0)
@@ -95,7 +95,7 @@ def _build_layer_problem():
 
 @cupy_required
 def test_eels_ret_layer_cupy_sig_matches_cpu():
-    from GUI.mnpbem.simulation.eels_ret import EELSRet
+    from mnpbem.simulation.eels_ret import EELSRet
 
     p, bem, _layer = _build_layer_problem()
     impact = np.array([[20.0, 0.0]])
@@ -119,9 +119,9 @@ def test_eels_ret_layer_cupy_sig_matches_cpu():
 # -- EELSStat + Mirror-symmetric particle ----------------------------------
 
 def _build_mirror_problem():
-    from GUI.mnpbem import EpsDrude, EpsConst, trisphere
-    from GUI.mnpbem.geometry import ComParticleMirror
-    from GUI.mnpbem.bem.bem_stat_mirror import BEMStatMirror
+    from mnpbem import EpsDrude, EpsConst, trisphere
+    from mnpbem.geometry import ComParticleMirror
+    from mnpbem.bem.bem_stat_mirror import BEMStatMirror
 
     eps_au = EpsDrude(9.5, 138.0, 138.0)
     eps_med = EpsConst(1.0)
@@ -136,7 +136,7 @@ def _build_mirror_problem():
 @cupy_required
 @pytest.mark.skip(reason = 'EELS x ComParticleMirror not in MNPBEM Demo set')
 def test_eels_stat_mirror_cupy_sig_matches_cpu():
-    from GUI.mnpbem.simulation.eels_stat import EELSStat
+    from mnpbem.simulation.eels_stat import EELSStat
 
     mp, bem = _build_mirror_problem()
     impact = np.array([[20.0, 0.0]])
@@ -160,9 +160,9 @@ def test_eels_stat_mirror_cupy_sig_matches_cpu():
 # -- EELSStat + Layer (substrate) ------------------------------------------
 
 def _build_stat_layer_problem():
-    from GUI.mnpbem import EpsDrude, EpsConst, trisphere, ComParticle
-    from GUI.mnpbem.geometry import LayerStructure
-    from GUI.mnpbem.bem.bem_stat_layer import BEMStatLayer
+    from mnpbem import EpsDrude, EpsConst, trisphere, ComParticle
+    from mnpbem.geometry import LayerStructure
+    from mnpbem.bem.bem_stat_layer import BEMStatLayer
 
     eps_au = EpsDrude(9.5, 138.0, 138.0)
     eps_med = EpsConst(1.0)
@@ -181,7 +181,7 @@ def _build_stat_layer_problem():
 
 @cupy_required
 def test_eels_stat_layer_cupy_sig_matches_cpu():
-    from GUI.mnpbem.simulation.eels_stat import EELSStat
+    from mnpbem.simulation.eels_stat import EELSStat
 
     p, bem, _layer = _build_stat_layer_problem()
     impact = np.array([[20.0, 0.0]])
@@ -205,9 +205,9 @@ def test_eels_stat_layer_cupy_sig_matches_cpu():
 # -- EELSRet + Mirror-symmetric particle -----------------------------------
 
 def _build_ret_mirror_problem():
-    from GUI.mnpbem import EpsDrude, EpsConst, trisphere
-    from GUI.mnpbem.geometry import ComParticleMirror
-    from GUI.mnpbem.bem.bem_ret_mirror import BEMRetMirror
+    from mnpbem import EpsDrude, EpsConst, trisphere
+    from mnpbem.geometry import ComParticleMirror
+    from mnpbem.bem.bem_ret_mirror import BEMRetMirror
 
     eps_au = EpsDrude(9.5, 138.0, 138.0)
     eps_med = EpsConst(1.0)
@@ -222,7 +222,7 @@ def _build_ret_mirror_problem():
 @cupy_required
 @pytest.mark.skip(reason = 'EELS x ComParticleMirror not in MNPBEM Demo set')
 def test_eels_ret_mirror_cupy_sig_matches_cpu():
-    from GUI.mnpbem.simulation.eels_ret import EELSRet
+    from mnpbem.simulation.eels_ret import EELSRet
 
     mp, bem = _build_ret_mirror_problem()
     impact = np.array([[20.0, 0.0]])

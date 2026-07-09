@@ -20,12 +20,12 @@ if "mnpbem" not in sys.modules:
     _stub.__path__ = ["mnpbem"]
     sys.modules["mnpbem"] = _stub
 
-from GUI.mnpbem.materials.eps_const import EpsConst
-from GUI.mnpbem.geometry import trisphere, ComParticle
-from GUI.mnpbem.greenfun import CompStruct
-from GUI.mnpbem.simulation.dipole_ret import DipoleRet
-from GUI.mnpbem.simulation.planewave_ret import PlaneWaveRet
-from GUI.mnpbem.spectrum import SpectrumRet
+from mnpbem.materials.eps_const import EpsConst
+from mnpbem.geometry import trisphere, ComParticle
+from mnpbem.greenfun import CompStruct
+from mnpbem.simulation.dipole_ret import DipoleRet
+from mnpbem.simulation.planewave_ret import PlaneWaveRet
+from mnpbem.spectrum import SpectrumRet
 
 
 # ============================================================================

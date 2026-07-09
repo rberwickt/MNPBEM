@@ -26,11 +26,11 @@ from typing import Any, Tuple
 import numpy as np
 import pytest
 
-from GUI.mnpbem.materials import EpsConst, EpsTable
-from GUI.mnpbem.geometry import trisphere, ComParticle, LayerStructure
-from GUI.mnpbem.bem import BEMRetLayer
-from GUI.mnpbem.simulation import PlaneWaveRetLayer
-from GUI.mnpbem.greenfun import GreenTabLayer
+from mnpbem.materials import EpsConst, EpsTable
+from mnpbem.geometry import trisphere, ComParticle, LayerStructure
+from mnpbem.bem import BEMRetLayer
+from mnpbem.simulation import PlaneWaveRetLayer
+from mnpbem.greenfun import GreenTabLayer
 
 
 _POL = np.array([[1.0, 0.0, 0.0]])
@@ -90,7 +90,7 @@ def test_core_shell_on_substrate_no_shape_mismatch():
     p, layer, _ = _au_ag_core_shell_on_glass()
 
     # Sanity check that ind1/ind2 are < total faces (the trigger condition)
-    from GUI.mnpbem.greenfun.compgreen_ret_layer import CompGreenRetLayer
+    from mnpbem.greenfun.compgreen_ret_layer import CompGreenRetLayer
     cg = CompGreenRetLayer(p, p, layer)
     assert len(cg.ind1) < p.n, \
         '[error] Test setup invalid: ind1 should be a strict subset (got {} of {})'.format(
@@ -121,7 +121,7 @@ def test_single_au_sphere_on_substrate_unchanged():
 
     p, layer, _ = _au_sphere_on_glass()
 
-    from GUI.mnpbem.greenfun.compgreen_ret_layer import CompGreenRetLayer
+    from mnpbem.greenfun.compgreen_ret_layer import CompGreenRetLayer
     cg = CompGreenRetLayer(p, p, layer)
     assert len(cg.ind1) == p.n, \
         '[error] Au sphere on glass should have ind1 = full range (got {} of {})'.format(
@@ -137,7 +137,7 @@ def test_assembly_subblock_consistency():
 
     p, layer, _ = _au_sphere_on_glass()
 
-    from GUI.mnpbem.greenfun.compgreen_ret_layer import CompGreenRetLayer
+    from mnpbem.greenfun.compgreen_ret_layer import CompGreenRetLayer
     cg = CompGreenRetLayer(p, p, layer)
     cg.gr.eval_components(600.0)
 

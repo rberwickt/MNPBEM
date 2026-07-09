@@ -27,10 +27,10 @@ import matplotlib.pyplot as plt
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
-from GUI.mnpbem.materials import EpsConst, EpsTable
-from GUI.mnpbem.geometry import trisphere, ComParticle, ComPoint
-from GUI.mnpbem.bem import BEMRet
-from GUI.mnpbem.simulation import DipoleRet
+from mnpbem.materials import EpsConst, EpsTable
+from mnpbem.geometry import trisphere, ComParticle, ComPoint
+from mnpbem.bem import BEMRet
+from mnpbem.simulation import DipoleRet
 
 
 def main():

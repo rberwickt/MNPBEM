@@ -16,10 +16,10 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from GUI.mnpbem.materials import EpsConst, EpsTable
-from GUI.mnpbem.geometry import trisphere, ComParticle, LayerStructure
-from GUI.mnpbem.simulation import PlaneWaveRet, PlaneWaveStat
-from GUI.mnpbem.bem import BEMRetIter, BEMStatIter, BEMRetLayerIter
+from mnpbem.materials import EpsConst, EpsTable
+from mnpbem.geometry import trisphere, ComParticle, LayerStructure
+from mnpbem.simulation import PlaneWaveRet, PlaneWaveStat
+from mnpbem.bem import BEMRetIter, BEMStatIter, BEMRetLayerIter
 
 
 _ENEI = 600.0

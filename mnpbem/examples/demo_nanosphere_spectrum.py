@@ -15,10 +15,10 @@ import matplotlib.pyplot as plt
 import sys
 sys.path.insert(0, '/home/user/MNPBEM')
 
-from GUI.mnpbem.materials import EpsDrude, EpsConst
-from GUI.mnpbem.geometry import trisphere, ComParticle
-from GUI.mnpbem.bem import BEMStat, BEMRet
-from GUI.mnpbem.excitation import PlaneWaveStat, PlaneWaveRet
+from mnpbem.materials import EpsDrude, EpsConst
+from mnpbem.geometry import trisphere, ComParticle
+from mnpbem.bem import BEMStat, BEMRet
+from mnpbem.excitation import PlaneWaveStat, PlaneWaveRet
 
 
 def drude_gold():

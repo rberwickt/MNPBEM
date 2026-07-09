@@ -27,8 +27,8 @@ from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from GUI.mnpbem.bem.bem_iter import BEMIter
-from GUI.mnpbem.greenfun import CompStruct
+from mnpbem.bem.bem_iter import BEMIter
+from mnpbem.greenfun import CompStruct
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +211,7 @@ def _make_stat_iter(particle, green_func=None, **options):
     """
     Create a BEMStatIter with mock Green function, bypassing _init_green.
     """
-    from GUI.mnpbem.bem.bem_stat_iter import BEMStatIter
+    from mnpbem.bem.bem_stat_iter import BEMStatIter
 
     class _TestStatIter(BEMStatIter):
         def _init_green(self, p, **opts):
@@ -232,7 +232,7 @@ def _make_ret_iter(particle, green_func=None, **options):
     """
     Create a BEMRetIter with mock Green function, bypassing _init_green.
     """
-    from GUI.mnpbem.bem.bem_ret_iter import BEMRetIter
+    from mnpbem.bem.bem_ret_iter import BEMRetIter
 
     class _TestRetIter(BEMRetIter):
         def _init_green(self, p, **opts):
@@ -252,7 +252,7 @@ def _make_ret_layer_iter(particle, green_func=None, **options):
     """
     Create a BEMRetLayerIter with mock Green function, bypassing _init_green.
     """
-    from GUI.mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
+    from mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
 
     class _TestRetLayerIter(BEMRetLayerIter):
         def _init_green(self, p, **opts):
@@ -555,7 +555,7 @@ class TestBEMStatIter(object):
 
     def test_construction_inherits_bemiter(self):
         """BEMStatIter inherits from BEMIter (MATLAB: bemstatiter < bemiter)."""
-        from GUI.mnpbem.bem.bem_stat_iter import BEMStatIter
+        from mnpbem.bem.bem_stat_iter import BEMStatIter
         assert issubclass(BEMStatIter, BEMIter)
 
     def test_init_matrices_lambda(self, particle):
@@ -665,7 +665,7 @@ class TestBEMStatIter(object):
         result = bem._mfun(vec)
         assert result.shape == (n,)
         # result = lu_solve_dispatch(mat_lu, vec)
-        from GUI.mnpbem.utils.gpu import lu_solve_dispatch
+        from mnpbem.utils.gpu import lu_solve_dispatch
         expected = lu_solve_dispatch(bem._mat_lu, vec.reshape(n, -1))
         np.testing.assert_allclose(result, expected.reshape(-1))
 
@@ -793,12 +793,12 @@ class TestBEMStatIter(object):
 
     def test_name_property(self):
         """BEMStatIter.name is 'bemsolver' (MATLAB: Constant property)."""
-        from GUI.mnpbem.bem.bem_stat_iter import BEMStatIter
+        from mnpbem.bem.bem_stat_iter import BEMStatIter
         assert BEMStatIter.name == 'bemsolver'
 
     def test_needs_property(self):
         """BEMStatIter.needs has sim='stat' (MATLAB: Constant property)."""
-        from GUI.mnpbem.bem.bem_stat_iter import BEMStatIter
+        from mnpbem.bem.bem_stat_iter import BEMStatIter
         assert BEMStatIter.needs['sim'] == 'stat'
 
 
@@ -907,7 +907,7 @@ class TestBEMRetIter(object):
         _decorate_deltai computes sum_i nvec_i * Deltai * nvec_i.
         MATLAB: initprecond.m, fun(Deltai, nvec) using all 3 components.
         """
-        from GUI.mnpbem.bem.bem_ret_iter import BEMRetIter
+        from mnpbem.bem.bem_ret_iter import BEMRetIter
         n = 4
         rng = np.random.RandomState(77)
         Deltai = rng.randn(n, n) + 1j * rng.randn(n, n)
@@ -969,7 +969,7 @@ class TestBEMRetIter(object):
         _inner computes dot product of nvec and a.
         MATLAB: bemretiter/private/inner.m.
         """
-        from GUI.mnpbem.bem.bem_ret_iter import BEMRetIter
+        from mnpbem.bem.bem_ret_iter import BEMRetIter
         n = 4
         rng = np.random.RandomState(10)
         nvec = rng.randn(n, 3)
@@ -980,7 +980,7 @@ class TestBEMRetIter(object):
 
     def test_inner_with_mul(self):
         """_inner with mul argument (MATLAB: inner.m, mul line)."""
-        from GUI.mnpbem.bem.bem_ret_iter import BEMRetIter
+        from mnpbem.bem.bem_ret_iter import BEMRetIter
         n = 4
         rng = np.random.RandomState(10)
         nvec = rng.randn(n, 3)
@@ -992,14 +992,14 @@ class TestBEMRetIter(object):
 
     def test_inner_zero_input(self):
         """_inner returns 0 for zero input (MATLAB: inner.m line 4)."""
-        from GUI.mnpbem.bem.bem_ret_iter import BEMRetIter
+        from mnpbem.bem.bem_ret_iter import BEMRetIter
         nvec = np.ones((4, 3))
         result = BEMRetIter._inner(nvec, 0)
         assert result == 0
 
     def test_inner_3d(self):
         """_inner for 3D arrays (n, 3, siz) (MATLAB: inner.m squeeze)."""
-        from GUI.mnpbem.bem.bem_ret_iter import BEMRetIter
+        from mnpbem.bem.bem_ret_iter import BEMRetIter
         n, siz = 4, 2
         rng = np.random.RandomState(20)
         nvec = rng.randn(n, 3)
@@ -1013,7 +1013,7 @@ class TestBEMRetIter(object):
         _outer computes outer product of nvec and val.
         MATLAB: bemretiter/private/outer.m.
         """
-        from GUI.mnpbem.bem.bem_ret_iter import BEMRetIter
+        from mnpbem.bem.bem_ret_iter import BEMRetIter
         n = 4
         rng = np.random.RandomState(30)
         nvec = rng.randn(n, 3)
@@ -1024,7 +1024,7 @@ class TestBEMRetIter(object):
 
     def test_outer_with_mul(self):
         """_outer with mul argument (MATLAB: outer.m, mul line)."""
-        from GUI.mnpbem.bem.bem_ret_iter import BEMRetIter
+        from mnpbem.bem.bem_ret_iter import BEMRetIter
         n = 4
         rng = np.random.RandomState(30)
         nvec = rng.randn(n, 3)
@@ -1036,14 +1036,14 @@ class TestBEMRetIter(object):
 
     def test_outer_zero_input(self):
         """_outer returns 0 for zero input (MATLAB: outer.m line 4)."""
-        from GUI.mnpbem.bem.bem_ret_iter import BEMRetIter
+        from mnpbem.bem.bem_ret_iter import BEMRetIter
         nvec = np.ones((4, 3))
         result = BEMRetIter._outer(nvec, 0)
         assert result == 0
 
     def test_outer_2d(self):
         """_outer for 2D val (n, siz) produces (n, 3, siz) result."""
-        from GUI.mnpbem.bem.bem_ret_iter import BEMRetIter
+        from mnpbem.bem.bem_ret_iter import BEMRetIter
         n, siz = 4, 3
         rng = np.random.RandomState(31)
         nvec = rng.randn(n, 3)
@@ -1055,7 +1055,7 @@ class TestBEMRetIter(object):
 
     def test_subtract(self):
         """_subtract handles mixed array/scalar subtraction."""
-        from GUI.mnpbem.bem.bem_ret_iter import BEMRetIter
+        from mnpbem.bem.bem_ret_iter import BEMRetIter
         a = np.array([1.0, 2.0, 3.0])
         b = np.array([0.5, 1.0, 1.5])
         np.testing.assert_allclose(BEMRetIter._subtract(a, b), a - b)
@@ -1237,12 +1237,12 @@ class TestBEMRetIter(object):
 
     def test_needs_property(self):
         """needs specifies retarded simulation type."""
-        from GUI.mnpbem.bem.bem_ret_iter import BEMRetIter
+        from mnpbem.bem.bem_ret_iter import BEMRetIter
         assert BEMRetIter.needs == {'sim': 'ret'}
 
     def test_name_property(self):
         """name is 'bemsolver'."""
-        from GUI.mnpbem.bem.bem_ret_iter import BEMRetIter
+        from mnpbem.bem.bem_ret_iter import BEMRetIter
         assert BEMRetIter.name == 'bemsolver'
 
     def test_mtimes(self, particle):
@@ -1318,7 +1318,7 @@ class TestBEMRetLayerIter(object):
 
     def test_name_and_needs(self):
         """Class attributes match MATLAB Constant properties."""
-        from GUI.mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
+        from mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
         assert BEMRetLayerIter.name == 'bemsolver'
         assert BEMRetLayerIter.needs == {'sim': 'ret'}
 
@@ -1327,7 +1327,7 @@ class TestBEMRetLayerIter(object):
         _decorate_gamma uses only parallel (x,y) normal vector components.
         MATLAB: initprecond.m, fun(Gamma, nvec) with nvec(:,1:2).
         """
-        from GUI.mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
+        from mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
         n = 4
         rng = np.random.RandomState(88)
         Gamma = rng.randn(n, n) + 1j * rng.randn(n, n)
@@ -1347,8 +1347,8 @@ class TestBEMRetLayerIter(object):
         _decorate_gamma uses 2 components (parallel), while BEMRetIter._decorate_deltai
         uses 3 (full). This is the key difference for layer structure.
         """
-        from GUI.mnpbem.bem.bem_ret_iter import BEMRetIter
-        from GUI.mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
+        from mnpbem.bem.bem_ret_iter import BEMRetIter
+        from mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
         n = 4
         rng = np.random.RandomState(90)
         M = rng.randn(n, n) + 1j * rng.randn(n, n)
@@ -1411,7 +1411,7 @@ class TestBEMRetLayerIter(object):
         _inner handles 2D normal vectors (parallel only).
         MATLAB: bemretlayeriter/private/inner.m with nvec 2 columns.
         """
-        from GUI.mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
+        from mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
         n = 4
         rng = np.random.RandomState(25)
         nvec = rng.randn(n, 2)
@@ -1422,7 +1422,7 @@ class TestBEMRetLayerIter(object):
 
     def test_inner_3d_nvec(self):
         """_inner handles 3D normal vectors (full)."""
-        from GUI.mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
+        from mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
         n = 4
         rng = np.random.RandomState(25)
         nvec = rng.randn(n, 3)
@@ -1433,13 +1433,13 @@ class TestBEMRetLayerIter(object):
 
     def test_inner_zero(self):
         """_inner returns 0 for zero input."""
-        from GUI.mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
+        from mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
         nvec = np.ones((4, 3))
         assert BEMRetLayerIter._inner(nvec, 0) == 0
 
     def test_inner_with_mul(self):
         """_inner with mul argument."""
-        from GUI.mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
+        from mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
         n = 4
         rng = np.random.RandomState(26)
         nvec = rng.randn(n, 3)
@@ -1454,7 +1454,7 @@ class TestBEMRetLayerIter(object):
         _outer with 2D nvec returns (n, 2) result.
         MATLAB: bemretlayeriter/private/outer.m with nvec 2 columns.
         """
-        from GUI.mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
+        from mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
         n = 4
         rng = np.random.RandomState(35)
         nvec = rng.randn(n, 2)
@@ -1466,7 +1466,7 @@ class TestBEMRetLayerIter(object):
 
     def test_outer_3d_nvec(self):
         """_outer with 3D nvec returns (n, 3) result."""
-        from GUI.mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
+        from mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
         n = 4
         rng = np.random.RandomState(35)
         nvec = rng.randn(n, 3)
@@ -1476,13 +1476,13 @@ class TestBEMRetLayerIter(object):
 
     def test_outer_zero(self):
         """_outer returns 0 for zero input."""
-        from GUI.mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
+        from mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
         nvec = np.ones((4, 3))
         assert BEMRetLayerIter._outer(nvec, 0) == 0
 
     def test_outer_2d_val(self):
         """_outer for 2D val (n, siz) produces (n, ndim, siz) result."""
-        from GUI.mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
+        from mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
         n, siz = 4, 3
         rng = np.random.RandomState(36)
         nvec = rng.randn(n, 3)
@@ -1492,7 +1492,7 @@ class TestBEMRetLayerIter(object):
 
     def test_subtract(self):
         """_subtract handles mixed scalar/array."""
-        from GUI.mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
+        from mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
         a = np.array([1.0, 2.0])
         b = np.array([0.5, 1.0])
         np.testing.assert_allclose(BEMRetLayerIter._subtract(a, b), a - b)
@@ -1504,7 +1504,7 @@ class TestBEMRetLayerIter(object):
         _solve_block_lu performs block LU solve.
         MATLAB: bemretlayeriter/private/mfun.m, function fun(M, b1, b2).
         """
-        from GUI.mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
+        from mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
         n = 4
         rng = np.random.RandomState(66)
         im11 = rng.randn(n, n) + 1j * rng.randn(n, n)
@@ -1665,7 +1665,7 @@ class TestBEMRetLayerIter(object):
 
     def test_layer_green_class_exists(self):
         """_LayerGreen helper class exists and has expected attributes."""
-        from GUI.mnpbem.bem.bem_ret_layer_iter import _LayerGreen
+        from mnpbem.bem.bem_ret_layer_iter import _LayerGreen
         lg = _LayerGreen()
         assert lg.ss is None
         assert lg.hh is None
@@ -1683,17 +1683,17 @@ class TestCrossClassConsistency(object):
 
     def test_bemstatiter_inherits_bemiter(self):
         """BEMStatIter inherits from BEMIter (MATLAB: bemstatiter < bemiter)."""
-        from GUI.mnpbem.bem.bem_stat_iter import BEMStatIter
+        from mnpbem.bem.bem_stat_iter import BEMStatIter
         assert issubclass(BEMStatIter, BEMIter)
 
     def test_bemretiter_inherits_bemiter(self):
         """BEMRetIter inherits from BEMIter (MATLAB: bemretiter < bemiter)."""
-        from GUI.mnpbem.bem.bem_ret_iter import BEMRetIter
+        from mnpbem.bem.bem_ret_iter import BEMRetIter
         assert issubclass(BEMRetIter, BEMIter)
 
     def test_bemretlayeriter_inherits_bemiter(self):
         """BEMRetLayerIter inherits from BEMIter (MATLAB: bemretlayeriter < bemiter)."""
-        from GUI.mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
+        from mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
         assert issubclass(BEMRetLayerIter, BEMIter)
 
     def test_solver_map_all_entries(self):
@@ -1708,9 +1708,9 @@ class TestCrossClassConsistency(object):
 
     def test_all_solvers_have_name_property(self):
         """All iterative solvers have name='bemsolver'."""
-        from GUI.mnpbem.bem.bem_stat_iter import BEMStatIter
-        from GUI.mnpbem.bem.bem_ret_iter import BEMRetIter
-        from GUI.mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
+        from mnpbem.bem.bem_stat_iter import BEMStatIter
+        from mnpbem.bem.bem_ret_iter import BEMRetIter
+        from mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
         assert BEMStatIter.name == 'bemsolver'
         assert BEMRetIter.name == 'bemsolver'
         assert BEMRetLayerIter.name == 'bemsolver'

@@ -10,10 +10,10 @@ import time
 
 import numpy as np
 
-from GUI.mnpbem.materials import EpsConst, EpsTable
-from GUI.mnpbem.geometry import trisphere, ComParticle, LayerStructure
-from GUI.mnpbem.bem import BEMRetLayer
-from GUI.mnpbem.simulation import PlaneWaveRetLayer
+from mnpbem.materials import EpsConst, EpsTable
+from mnpbem.geometry import trisphere, ComParticle, LayerStructure
+from mnpbem.bem import BEMRetLayer
+from mnpbem.simulation import PlaneWaveRetLayer
 
 # 1. Materials (indices match MATLAB 1-based convention)
 epstab = [EpsConst(1.0), EpsTable('gold.dat'), EpsConst(2.25)]

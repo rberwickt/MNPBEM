@@ -18,12 +18,12 @@ import gc
 import numpy as np
 import pytest
 
-from GUI.mnpbem.materials import EpsConst, EpsTable
-from GUI.mnpbem.geometry import trisphere, tricube, ComParticle, LayerStructure
-from GUI.mnpbem.bem import BEMRetIter, BEMRetLayer
-from GUI.mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
-from GUI.mnpbem.simulation import PlaneWaveRet, PlaneWaveRetLayer
-from GUI.mnpbem.greenfun import GreenTabLayer
+from mnpbem.materials import EpsConst, EpsTable
+from mnpbem.geometry import trisphere, tricube, ComParticle, LayerStructure
+from mnpbem.bem import BEMRetIter, BEMRetLayer
+from mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
+from mnpbem.simulation import PlaneWaveRet, PlaneWaveRetLayer
+from mnpbem.greenfun import GreenTabLayer
 
 
 try:

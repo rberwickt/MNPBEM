@@ -9,12 +9,12 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from GUI.mnpbem.greenfun import CompStruct
-from GUI.mnpbem.materials import EpsConst, make_nonlocal_pair
-from GUI.mnpbem.geometry import ComParticle, trisphere
-from GUI.mnpbem.greenfun import coverlayer
-from GUI.mnpbem.bem import BEMRetIter
-from GUI.mnpbem.simulation.planewave_ret import PlaneWaveRet
+from mnpbem.greenfun import CompStruct
+from mnpbem.materials import EpsConst, make_nonlocal_pair
+from mnpbem.geometry import ComParticle, trisphere
+from mnpbem.greenfun import coverlayer
+from mnpbem.bem import BEMRetIter
+from mnpbem.simulation.planewave_ret import PlaneWaveRet
 
 
 # v1.5.0 Lane E2 nonlocal benchmark: BEMRetIter on a cover-layer

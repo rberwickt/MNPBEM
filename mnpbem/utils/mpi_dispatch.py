@@ -93,8 +93,8 @@ def _solve_chunk_cpu(
         bem_kwargs: dict) -> dict:
     """Serial CPU loop over a wavelength chunk (no GPU visible)."""
     os.environ.setdefault('MNPBEM_NUMBA', '1')
-    from GUI.mnpbem.bem import BEMRet
-    from GUI.mnpbem.simulation import PlaneWaveRet
+    from mnpbem.bem import BEMRet
+    from mnpbem.simulation import PlaneWaveRet
 
     p = particle_factory()
     bem = BEMRet(p, **bem_kwargs)

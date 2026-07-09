@@ -9,11 +9,11 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from GUI.mnpbem.materials import EpsConst
-from GUI.mnpbem.geometry import ComParticle
-from GUI.mnpbem.geometry.mesh_generators import _trisphere_fibonacci, tricube
-from GUI.mnpbem.bem import BEMRetIter
-from GUI.mnpbem.simulation.planewave_ret import PlaneWaveRet
+from mnpbem.materials import EpsConst
+from mnpbem.geometry import ComParticle
+from mnpbem.geometry.mesh_generators import _trisphere_fibonacci, tricube
+from mnpbem.bem import BEMRetIter
+from mnpbem.simulation.planewave_ret import PlaneWaveRet
 
 
 # CUSTOMIZE: Mesh face count. Lane E2 baseline is ~25k; we use a smaller

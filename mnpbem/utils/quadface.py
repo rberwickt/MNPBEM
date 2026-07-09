@@ -15,7 +15,7 @@ try:
     from .quadrature import lglnodes, triangle_unit_set
 except ImportError:
     # For standalone testing
-    from GUI.mnpbem.utils.quadrature import lglnodes, triangle_unit_set
+    from mnpbem.utils.quadrature import lglnodes, triangle_unit_set
 
 
 def _trisubdivide(xtab, ytab, wtab, nsub):

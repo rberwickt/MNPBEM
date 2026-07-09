@@ -21,17 +21,17 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from GUI.mnpbem.materials import EpsConst, EpsDrude
-from GUI.mnpbem.geometry import trisphere, ComParticle
-from GUI.mnpbem.bem import (
+from mnpbem.materials import EpsConst, EpsDrude
+from mnpbem.geometry import trisphere, ComParticle
+from mnpbem.bem import (
     BEMStat, BEMRet, BEMStatLayer, BEMRetLayer,
     BEMStatMirror, BEMRetMirror, BEMStatEig, BEMStatEigMirror,
 )
-from GUI.mnpbem.bem.bem_stat_iter import BEMStatIter
-from GUI.mnpbem.bem.bem_ret_iter import BEMRetIter
-from GUI.mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
-from GUI.mnpbem.simulation import PlaneWaveStat, PlaneWaveRet
-from GUI.mnpbem.utils import gpu as gmod
+from mnpbem.bem.bem_stat_iter import BEMStatIter
+from mnpbem.bem.bem_ret_iter import BEMRetIter
+from mnpbem.bem.bem_ret_layer_iter import BEMRetLayerIter
+from mnpbem.simulation import PlaneWaveStat, PlaneWaveRet
+from mnpbem.utils import gpu as gmod
 
 
 def _make_sphere(nfaces=144, radius=10.0):
