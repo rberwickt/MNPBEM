@@ -21,7 +21,7 @@ class StructureSettingsWidget(QGroupBox):
         if len(self.state.materials) < 1:
             self.state.materials.append(None)
         # hard coding index zero for now (which should be fine?)
-        self.geo_mat.currentTextChanged.connect(lambda mat: self.state.materials.__setitem__(0, self.state.loaded_dielectrics[mat]))
+        self.geo_mat.currentTextChanged.connect(lambda mat: self.state.materials.__setitem__(0, mat))
         form_layout.addRow("Material:", self.geo_mat)
 
         self.layout.addLayout(form_layout)

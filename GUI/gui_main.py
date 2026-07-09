@@ -3,6 +3,13 @@ import sys
 from pathlib import Path
 from PySide6.QtWidgets import (QApplication, QMainWindow, QStackedWidget, QToolBar)
 from PySide6.QtGui import QIcon, QAction
+
+from pymnpbem_simulation.env_setup import setup_env
+
+# this is hard-coded for now, can change later
+setup_env(n_threads=4, n_gpus_per_worker=0)
+
+
 from .simulation_state import SimulationState
 from .pages.start import StartPage
 from .pages.simulation import SimulationPage

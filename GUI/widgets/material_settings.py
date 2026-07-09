@@ -13,7 +13,7 @@ class MaterialOptionsWidget(QGroupBox):
 
         self.medium_combo = MaterialComboBox(self.state)
         self.layout.addRow("Environment Material:", self.medium_combo)
-        self.medium_combo.currentTextChanged.connect(lambda mat: setattr(self.state, 'environment_material', self.state.loaded_dielectrics[mat]))
+        self.medium_combo.currentTextChanged.connect(lambda mat: setattr(self.state, 'environment_material', mat))
 
         self.substrate_check = QCheckBox()
         checkbox_layout = QHBoxLayout()
@@ -24,7 +24,7 @@ class MaterialOptionsWidget(QGroupBox):
         self.layout.addRow("Enable Substrate:", checkbox_layout)
         
         self.substrate_combo = MaterialComboBox(self.state)
-        self.substrate_combo.currentTextChanged.connect(lambda mat: setattr(self.state, 'substrate_material', self.state.loaded_dielectrics[mat]))
+        self.substrate_combo.currentTextChanged.connect(lambda mat: setattr(self.state, 'substrate_material', mat))
         self.layout.addRow("Substrate Material:", self.substrate_combo)
         self.layout.setRowVisible(self.substrate_combo, False) # hide since it is false by default
 

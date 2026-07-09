@@ -259,8 +259,8 @@ class SimulationState:
         - progress_callback: optional callable that will be called with simple status messages (str).
         Returns the simulation result dict (same as dispatch_single_node returns).
         
-        NOTE: This function sets up environment variables and imports before running.
-        It can safely be called from a background thread.
+        NOTE: Environment must be set up BEFORE this is called (done in gui_main.py).
+        This function can safely be called from a background thread.
         """
         def _report(msg: str):
             if progress_callback:
@@ -283,27 +283,16 @@ class SimulationState:
             cfg.setdefault("simulation", {})
             cfg["simulation"]["n_wavelengths"] = int(n_wavelengths_override)
 
-        # Import the minimal pymnpbem_simulation helpers and run programmatically.
-        # Important: set up environment BEFORE importing heavy mnpbem modules.
+        # Import pymnpbem_simulation helpers (environment already set up at GUI startup)
         try:
-            _report("Preparing environment")
-            from pymnpbem_simulation.env_setup import assert_pre_import, setup_env
+            _report("Preparing simulation")
             from pymnpbem_simulation.config import apply_defaults, validate_config
             from pymnpbem_simulation.util import print_info, ensure_dir
-            # Ensure env setup hasn't been bypassed
-            assert_pre_import()
 
             # ensure compute block defaulting, then apply defaults
             cfg = apply_defaults(cfg)
             validate_config(cfg)
 
-            n_threads = int(cfg.get("compute", {}).get("n_threads", 1))
-            n_gpus = int(cfg.get("compute", {}).get("n_gpus_per_worker", 0))
-
-            _report(f"Setting environment: n_threads={n_threads}, n_gpus={n_gpus}")
-            setup_env(n_threads, n_gpus)
-
-            # Now import structure/build + dispatch (after env is set)
             _report("Building structure")
             from pymnpbem_simulation.structures import build_structure
             from pymnpbem_simulation.dispatch import dispatch_single_node
