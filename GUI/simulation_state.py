@@ -5,6 +5,7 @@ from mnpbem.misc import EV2NM
 import traceback
 from pathlib import Path
 import threading
+import shutil
 
 # NOTE: add validation of simulation state before running the simulation (ex. environment material is set)
 @dataclass
@@ -110,7 +111,7 @@ class SimulationState:
 
         The result is intentionally similar to the YAML structure expected by
         pymnpbem_simulation.config.apply_defaults/validate_config and can be passed
-        into the programmatic runner below.
+        into the runner below.
         """
         # map GUI solver to pymnpbem type
         sim_type = "ret"
@@ -125,21 +126,20 @@ class SimulationState:
             structure_type = "rod"
         elif "cube" in s_type:
             structure_type = "cube"
-        elif "ellipsoid" in s_type:
-            structure_type = "ellipsoid"
+        #elif "ellipsoid" in s_type:
+            #structure_type = "ellipsoid"
         else:
             # fallback: use lowercase raw value
             structure_type = s_type
 
-        # wavelengths: pymnpbem uses nm grid; GUI may provide eV depending on energy_in_nm
         nm_min = float(self.energy_min)
         nm_max = float(self.energy_max)
         if not self.energy_in_nm:
-            # energy provided in eV: convert to nm with EV2NM helper
+            # convert to nm with EV2NM helper
             nm_min = float(nm_min / EV2NM)
             nm_max = float(nm_max / EV2NM)
 
-        # material resolution: try to pick a name (string) for materials where possible
+        # material resolution
         particle_name = None
         if len(self.materials) > 0:
             particle_name = self.materials[0]
@@ -148,7 +148,7 @@ class SimulationState:
 
         # build structure block
         struct_block: dict[str, Any] = {"type": structure_type, "mesh_density": float(self.mesh_density), "refine": int(self.refine), "interp": self.interp}
-        # populate shape-specific params
+        # shape-specific params
         if structure_type == "sphere":
             struct_block["diameter"] = float(self.diameter)
         elif structure_type == "rod":
@@ -159,10 +159,9 @@ class SimulationState:
             struct_block["size"] = float(self.size)
             struct_block["n_per_edge"] = int(self.n_per_edge)
         else:
-            # generic: include some fields if present
+            # generic
             struct_block["diameter"] = float(self.diameter)
 
-        # Resolve output directory
         if output_dir is None:
             output_dir = str(Path(".") / "tmp")
         else:
@@ -180,7 +179,7 @@ class SimulationState:
             "relcutoff": int(self.rel_cutoff)
         }
 
-        # excitation mapping - add excitation-specific parameters
+        # excitation-specific parameters
         if self.excitation_source == "Plane Wave":
             sim_config["excitation"] = "planewave"
             sim_config["polarizations"] = [[self.pol_x, self.pol_y, self.pol_z]]
@@ -302,10 +301,49 @@ class SimulationState:
 
             output_path = Path(cfg["output"]["dir"]) / cfg["output"]["name"]
             ensure_dir(str(output_path))
+
+            # Sigma cache is optional/best-effort. If this run reuses an
+            # existing output folder with a different structure/material
+            # hash, clear only the sigma cache subfolder to avoid noisy
+            # manifest-mismatch warnings during dispatch.
+            try:
+                from pymnpbem_simulation import sigma_cache as _sc
+
+                existing_manifest = _sc.read_manifest(str(output_path))
+                if existing_manifest is not None:
+                    expected_structure_hash = _sc.compute_structure_hash(
+                        cfg.get("structure", {})
+                    )
+                    expected_eps_hash = _sc.compute_eps_hash(
+                        cfg.get("materials", {})
+                    )
+
+                    manifest_structure_hash = existing_manifest.get("structure_hash", "")
+                    manifest_eps_hash = existing_manifest.get("eps_hash", "")
+
+                    has_structure_mismatch = (
+                        bool(manifest_structure_hash)
+                        and manifest_structure_hash != expected_structure_hash
+                    )
+                    has_eps_mismatch = (
+                        bool(manifest_eps_hash)
+                        and manifest_eps_hash != expected_eps_hash
+                    )
+
+                    if has_structure_mismatch or has_eps_mismatch:
+                        sigma_root = Path(_sc.sigma_dir(str(output_path)))
+                        if sigma_root.exists():
+                            shutil.rmtree(sigma_root, ignore_errors=True)
+                            _report(
+                                "Detected stale sigma cache for a different setup; "
+                                "cleared {}".format(sigma_root)
+                            )
+            except Exception:
+                pass
             
             # build structure (returns p, epstab, nfaces)
             p, epstab, nfaces = build_structure(cfg["structure"], cfg.get("materials", {}))
-            # build wavelength grid using the same logic as the CLI helper (but minimal here)
+            # build wavelength grid using the same logic as the CLI helper
             sim = cfg["simulation"]
             e_min = float(sim["enei_min"])
             e_max = float(sim["enei_max"])
@@ -321,7 +359,7 @@ class SimulationState:
             # store raw results in state for later postprocessing
             self.raw_results = result
 
-            # Optionally persist outputs using pymnpbem IO helpers
+            # Optionally save
             if save_outputs:
                 _report(f"Saving outputs to {output_path}")
                 save_run_metadata(str(output_path), cfg, nfaces)
@@ -333,7 +371,7 @@ class SimulationState:
             return result
 
         except Exception as exc:
-            # capture and re-raise (GUI should display a user-friendly message)
+            # capture and re-raise
             tb = traceback.format_exc()
             _report(f"Simulation failed: {exc}\n{tb}")
             raise

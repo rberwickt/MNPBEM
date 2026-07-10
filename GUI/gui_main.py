@@ -51,12 +51,13 @@ class MainController(QMainWindow):
         self.toolbar.addAction(state_action)
 
         self.page1.settings_completed.connect(self.go_to_sim)
+        self.page2.sim_completed.connect(self.go_to_post)
 
     def go_to_sim(self):
-        # Sim page needs to refresh its UI based on what was loaded in the initial page
-        self.page2.setup_ui_from_state() 
+        self.page2.setup_ui_from_state()  # not really using this, but could be useful later (so leaving it in)
         self.stacked_widget.setCurrentWidget(self.page2)
-    
+    def go_to_post(self):
+        self.stacked_widget.setCurrentWidget(self.page3)
     def toolbar_view_state(self): # freezes up the main window (close when done)
         dlg = StateDebugDialog(self.state, self)
         dlg.exec()
