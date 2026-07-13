@@ -9,7 +9,7 @@ class MaterialComboBox(QComboBox):
         super().__init__(parent)
         self.state = state
         # a labeled combo box
-        self.addItems(list(self.state.loaded_dielectrics.keys()))
+        self.addItems(list(self.state.loaded_dielectrics))
         self.setPlaceholderText("")
 
         # Set to -1 so the placeholder actually shows up

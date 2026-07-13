@@ -93,6 +93,9 @@ class StartPage(QWidget):
     def load_calculations(self):
         pass
     def load_materials(self):
+        self.state.loaded_dielectrics.clear()
+        self.state.material_descriptors.clear()
+
         for file_path in self.MAT_DIR.glob('*.*'):
             if file_path.name.startswith('__'):
                 continue
@@ -100,46 +103,47 @@ class StartPage(QWidget):
             module_name = file_path.stem
 
             try:
-                # .dat case
                 if file_path.suffix == '.dat':
-                    plugin_obj = EpsTable(str(file_path))
-                    self.state.loaded_dielectrics[module_name] = plugin_obj
-                    print(f"Successfully loaded tabulated data: {module_name}")
+                    # optional validation parse
+                    _ = EpsTable(str(file_path))
 
-                # .py case
+                    self.state.loaded_dielectrics.append(module_name)
+                    self.state.material_descriptors[module_name] = {
+                        "type": "table",
+                        "file": str(file_path.resolve())
+                    }
+
                 elif file_path.suffix == '.py':
-                    project_root = str(self.USER_DIR.parent)
-                
-                    if project_root not in sys.path:
-                        sys.path.insert(0, project_root)
-                    sys.modules.pop(module_name, None)
+                    # optional validation import
                     spec = importlib.util.spec_from_file_location(module_name, str(file_path))
-
                     if spec is None or spec.loader is None:
                         continue
-                
                     module = importlib.util.module_from_spec(spec)
-                    sys.modules[module_name] = module
                     spec.loader.exec_module(module)
 
-                    if hasattr(module, 'generate_eps_func'):
-                        plugin_obj = module.generate_eps_func()
-                        if callable(plugin_obj):
-                            self.state.loaded_dielectrics[module_name] = plugin_obj
-                            print(f"Successfully loaded script: {module_name}")
-                        else:
-                            print(f"{file_path.name} 'generate_eps_func' did not return a callable object.")
-                    else:
-                        print(f"{file_path.name} is missing 'generate_eps_func' function.")
+                    if not hasattr(module, "generate_eps_func"):
+                        continue
+
+                    test_obj = module.generate_eps_func()
+                    if not callable(test_obj):
+                        continue
+
+                    self.state.loaded_dielectrics.append(module_name)
+                    self.state.material_descriptors[module_name] = {
+                        "type": "python_module",
+                        "module_path": str(file_path.resolve()),
+                        "factory": "generate_eps_func"
+                    }
 
             except Exception as e:
                 print(f"Error importing {file_path.name}: {e}")
-        print(f"LOADED {len(self.state.loaded_dielectrics)} MATERIALS")
+
+        self.state.loaded_dielectrics.sort()
         self.update_material_list()
 
     def update_material_list(self):
         self._clear_layout(self.mat_layout)
-        for material in self.state.loaded_dielectrics.keys():
+        for material in self.state.loaded_dielectrics:
             self.mat_layout.addWidget(QLabel(material))
     def update_calculation_list(self):
         self._clear_layout(self.calc_layout)

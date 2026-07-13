@@ -7,14 +7,18 @@ from pathlib import Path
 import threading
 import shutil
 
-# NOTE: add validation of simulation state before running the simulation (ex. environment material is set)
+
 @dataclass
 class SimulationState:
-    # filename (str) => A callable that takes a float (enei) 
-    #        and returns a tuple of (complex_eps, float_k)
-    loaded_dielectrics: dict[str, Callable[[float], tuple[complex, float]]] = field(default_factory=dict) # all material functions
-    #loaded_calculations: dict[str, Callable] = field(default_factory=dict) # unsure what the callable will be for this
-    raw_results: Optional[Any] = None                                   # Simulation output (Sigma)
+    # UI-only: names shown in dropdowns
+    loaded_dielectrics: list[str] = field(default_factory=list)
+
+    # authoritative material source for simulation
+    material_descriptors: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    # loaded_calculations should be addresed at some point
+
+    raw_results: Optional[Any] = None               # Simulation output (Sigma)
 
     solver: str = "Retarded"
 
@@ -29,7 +33,7 @@ class SimulationState:
     structure: str = "Sphere" # shape
     use_substrate: bool = False
     materials: list[str] = field(default_factory=list)            # particle material names (core->shell)
-    environment_material: Optional[str] = None                    # e.g., 'vacuum' or 'water' or '/path/to/file.dat'
+    environment_material: Optional[str] = None                    # 
     substrate_material: Optional[str] = None
 
     mesh_density: int = 3 # nm density, sim code said to not let end user change this, but we can leave it in for now
@@ -204,7 +208,8 @@ class SimulationState:
             "simulation": sim_config,
             "materials": {
                 "medium": medium_name,
-                "materials": [particle_name] if particle_name is not None else []
+                "materials": [particle_name] if particle_name is not None else [],
+                "refractive_index_paths": self.material_descriptors
             },
             "compute": {
                 "n_workers": 1,
