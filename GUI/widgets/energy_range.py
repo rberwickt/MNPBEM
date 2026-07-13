@@ -1,4 +1,6 @@
-from PySide6.QtWidgets import (QGroupBox, QFormLayout, QSpinBox, QDoubleSpinBox, QPushButton)
+from PySide6.QtWidgets import (
+    QGroupBox, QFormLayout, QSpinBox, QDoubleSpinBox,
+    QPushButton)
 from ..simulation_state import SimulationState
 from mnpbem.misc import EV2NM
 

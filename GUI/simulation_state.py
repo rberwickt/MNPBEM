@@ -6,6 +6,7 @@ import traceback
 from pathlib import Path
 import threading
 import shutil
+import copy
 
 
 @dataclass
@@ -24,10 +25,22 @@ class SimulationState:
 
     # Energy Range Settings ===========================================
     energy_in_nm: bool = True
-    energy_min: float = 100.0
-    energy_max: float = 400.0
+    energy_min: float = 300.0
+    energy_max: float = 1200.0
     energy_steps: int = 10
     rel_cutoff: int = 3 # higher is slower, NOTE: not changed by the user right now
+
+    # Field grid sampling (rectangular). Volumetric output requires
+    # non-collapsed sampling along all 3 axes (especially z).
+    field_x_min: float = -50.0
+    field_x_max: float = 50.0
+    field_y_min: float = -50.0
+    field_y_max: float = 50.0
+    field_z_min: float = 0.0
+    field_z_max: float = 0.0
+    field_nx: int = 21
+    field_ny: int = 21
+    field_nz: int = 1
 
     # Structure and Material Settings ===================================
     structure: str = "Sphere" # shape
@@ -100,6 +113,18 @@ class SimulationState:
         
         if self.energy_steps < 1:
             return False, "Energy steps must be at least 1"
+
+        if self.field_x_min >= self.field_x_max:
+            return False, "Field grid x_min must be less than x_max"
+
+        if self.field_y_min >= self.field_y_max:
+            return False, "Field grid y_min must be less than y_max"
+
+        if self.field_nx < 1 or self.field_ny < 1 or self.field_nz < 1:
+            return False, "Field grid points (nx, ny, nz) must be at least 1"
+
+        if self.field_nz > 1 and self.field_z_min >= self.field_z_max:
+            return False, "Field grid z_min must be less than z_max when nz > 1"
         
         return True, ""
 
@@ -178,9 +203,16 @@ class SimulationState:
             "enei_max": float(nm_max),
             "n_wavelengths": int(self.energy_steps),
             "calculate_cross_sections": True,
-            "calculate_fields": False,
+            "calculate_fields": True,
             "interp": self.interp,
-            "relcutoff": int(self.rel_cutoff)
+            "relcutoff": int(self.rel_cutoff),
+            "grid": {
+                "type": "rectangular",
+                "x_range": [float(self.field_x_min), float(self.field_x_max)],
+                "y_range": [float(self.field_y_min), float(self.field_y_max)],
+                "z_range": [float(self.field_z_min), float(self.field_z_max)],
+                "n_points": [int(self.field_nx), int(self.field_ny), int(self.field_nz)]
+            }
         }
 
         # excitation-specific parameters
@@ -276,6 +308,28 @@ class SimulationState:
         # Build config dict
         cfg = self.to_dict(output_dir=output_dir, output_name=output_name)
 
+        def _has_spectrum_payload(res: Any) -> bool:
+            if not isinstance(res, dict):
+                return False
+            required = ("wavelength", "ext", "sca", "abs")
+            return all(k in res for k in required)
+
+        def _has_field_payload(res: Any) -> bool:
+            if not isinstance(res, dict):
+                return False
+            required = ("wavelength", "pos", "e")
+            return all(k in res for k in required)
+
+        def _merge_result_payload(base: dict, extra: dict) -> dict:
+            merged = dict(base)
+            for key in ("wavelength", "pos", "e", "h", "grid_shape", "inout"):
+                if key in extra:
+                    merged[key] = extra[key]
+            if "n_pol" in extra and "n_pol" not in merged:
+                merged["n_pol"] = extra["n_pol"]
+            merged["kind"] = "spectrum_field"
+            return merged
+
         # apply compute overrides if provided
         if compute_overrides:
             cfg.setdefault("compute", {})
@@ -307,42 +361,19 @@ class SimulationState:
             output_path = Path(cfg["output"]["dir"]) / cfg["output"]["name"]
             ensure_dir(str(output_path))
 
-            # Sigma cache is optional/best-effort. If this run reuses an
-            # existing output folder with a different structure/material
-            # hash, clear only the sigma cache subfolder to avoid noisy
-            # manifest-mismatch warnings during dispatch.
+            # Pre-run sigma cache clear (GUI policy): start each run from
+            # a clean sigma cache to avoid stale-mode reuse across runs
+            # (e.g. quasistatic cache accidentally consumed by retarded
+            # field evaluation in the same output folder).
             try:
                 from pymnpbem_simulation import sigma_cache as _sc
 
-                existing_manifest = _sc.read_manifest(str(output_path))
-                if existing_manifest is not None:
-                    expected_structure_hash = _sc.compute_structure_hash(
-                        cfg.get("structure", {})
+                sigma_root = Path(_sc.sigma_dir(str(output_path)))
+                if sigma_root.exists():
+                    shutil.rmtree(sigma_root, ignore_errors=True)
+                    _report(
+                        "Cleared pre-run sigma cache: {}".format(sigma_root)
                     )
-                    expected_eps_hash = _sc.compute_eps_hash(
-                        cfg.get("materials", {})
-                    )
-
-                    manifest_structure_hash = existing_manifest.get("structure_hash", "")
-                    manifest_eps_hash = existing_manifest.get("eps_hash", "")
-
-                    has_structure_mismatch = (
-                        bool(manifest_structure_hash)
-                        and manifest_structure_hash != expected_structure_hash
-                    )
-                    has_eps_mismatch = (
-                        bool(manifest_eps_hash)
-                        and manifest_eps_hash != expected_eps_hash
-                    )
-
-                    if has_structure_mismatch or has_eps_mismatch:
-                        sigma_root = Path(_sc.sigma_dir(str(output_path)))
-                        if sigma_root.exists():
-                            shutil.rmtree(sigma_root, ignore_errors=True)
-                            _report(
-                                "Detected stale sigma cache for a different setup; "
-                                "cleared {}".format(sigma_root)
-                            )
             except Exception:
                 pass
             
@@ -358,6 +389,35 @@ class SimulationState:
             _report("Dispatching simulation")
             t0 = time.time()
             result = dispatch_single_node(cfg, p, epstab, enei)
+
+            sim_cfg = cfg.get("simulation", {}) if isinstance(cfg, dict) else {}
+            wants_fields = bool(sim_cfg.get("calculate_fields", False))
+
+            # calculate_spectrum defaults to True in backend unless explicitly false.
+            wants_spectrum = bool(sim_cfg.get("calculate_spectrum", True))
+            if "calculate_cross_sections" in sim_cfg:
+                wants_spectrum = bool(sim_cfg.get("calculate_cross_sections", wants_spectrum))
+
+            if wants_fields and (not _has_field_payload(result)):
+                _report("Running field follow-up pass for post-processing")
+                cfg_field = copy.deepcopy(cfg)
+                cfg_field.setdefault("simulation", {})
+                cfg_field["simulation"]["calculate_spectrum"] = False
+                cfg_field["simulation"]["calculate_fields"] = True
+                cfg_field["simulation"]["save_sigma_cache"] = False
+                field_result = dispatch_single_node(cfg_field, p, epstab, enei)
+                result = _merge_result_payload(result, field_result)
+
+            if wants_spectrum and (not _has_spectrum_payload(result)):
+                _report("Running spectrum follow-up pass for post-processing")
+                cfg_spec = copy.deepcopy(cfg)
+                cfg_spec.setdefault("simulation", {})
+                cfg_spec["simulation"]["calculate_spectrum"] = True
+                cfg_spec["simulation"]["calculate_cross_sections"] = True
+                cfg_spec["simulation"]["calculate_fields"] = False
+                spec_result = dispatch_single_node(cfg_spec, p, epstab, enei)
+                result = _merge_result_payload(spec_result, result)
+
             total_s = time.time() - t0
             _report(f"Simulation finished in {total_s:.1f}s")
 

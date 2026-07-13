@@ -57,6 +57,7 @@ class MainController(QMainWindow):
         self.page2.setup_ui_from_state()  # not really using this, but could be useful later (so leaving it in)
         self.stacked_widget.setCurrentWidget(self.page2)
     def go_to_post(self):
+        self.page3.setup_ui_from_state()
         self.stacked_widget.setCurrentWidget(self.page3)
     def toolbar_view_state(self): # freezes up the main window (close when done)
         dlg = StateDebugDialog(self.state, self)

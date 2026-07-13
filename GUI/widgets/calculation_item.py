@@ -1,24 +1,30 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
                                QLabel, QCheckBox, QPushButton, QFrame, QSizePolicy)
 from PySide6.QtCore import Qt, QSize
+from typing import Callable
 
 class CalculationItemWidget(QWidget):
     
     def __init__(self, title_text, parent=None):
         super().__init__(parent)
 
-        self.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Preferred)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
         self.main_layout = QVBoxLayout(self)
-        self.main_layout.setContentsMargins(0, 0, 0, 0)
-        self.main_layout.setSpacing(0)
+        self.main_layout.setContentsMargins(6, 6, 6, 6)
+        self.main_layout.setSpacing(6)
+        self.main_layout.setAlignment(Qt.AlignTop)
+
+        self.setObjectName("calc_item")
+
+        self.action_buttons = []
 
         self.title_bar = QFrame()
+        self.title_bar.setObjectName("calc_title_bar")
         self.title_bar.setFrameShape(QFrame.StyledPanel)
         self.title_bar.setFixedHeight(40)
 
         self.title_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.title_bar.setStyleSheet("background-color: #f0f0f0; border-radius: 4px;")
 
         self.title_layout = QHBoxLayout(self.title_bar)
         self.title_layout.setContentsMargins(10, 5, 10, 5)
@@ -27,28 +33,34 @@ class CalculationItemWidget(QWidget):
         self.checkbox.setCursor(Qt.PointingHandCursor)
 
         self.toggle_button = QPushButton("▼")
+        self.toggle_button.setObjectName("calc_toggle_button")
         self.toggle_button.setFixedWidth(30)
         self.toggle_button.setCheckable(True)
         self.toggle_button.setChecked(True) 
         self.toggle_button.setCursor(Qt.PointingHandCursor)
-        self.toggle_button.setStyleSheet("border: none; font-weight: bold;")
         self.toggle_button.setVisible(False) 
         self.toggle_button.clicked.connect(self.toggle_content)
 
         self.title_label = QLabel(title_text)
-        self.title_label.setStyleSheet("font-weight: bold; margin-left: 5px;")
+        self.title_label.setObjectName("calc_title_label")
 
         self.title_layout.addWidget(self.checkbox)
         self.title_layout.addWidget(self.toggle_button)
         self.title_layout.addWidget(self.title_label)
-        self.title_layout.addStretch()
+        self.title_layout.addStretch(1)
+
+        self.action_layout = QHBoxLayout()
+        self.action_layout.setContentsMargins(0, 0, 0, 0)
+        self.action_layout.setSpacing(6)
+        self.title_layout.addLayout(self.action_layout)
 
         self.content_container = QWidget()
         self.container_layout = QVBoxLayout(self.content_container)
-        self.container_layout.setContentsMargins(0, 0, 0, 0)
+        self.container_layout.setContentsMargins(8, 0, 8, 8)
+        self.container_layout.setSpacing(6)
         self.content_container.setVisible(False) 
         
-        self.content_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.content_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         self.main_layout.addWidget(self.title_bar)
         self.main_layout.addWidget(self.content_container)
@@ -75,6 +87,27 @@ class CalculationItemWidget(QWidget):
             return QSize(max(base_width, content_min.width()), 
                          title_hint.height() + content_min.height())
         return QSize(base_width, title_hint.height())
+
+    def set_actions(self, actions: list[tuple[str, Callable]]):
+        while self.action_layout.count():
+            item = self.action_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+        self.action_buttons = []
+
+        for label, callback in actions:
+            button = QPushButton(label)
+            button.setObjectName("calc_header_action_button")
+            button.setCursor(Qt.PointingHandCursor)
+            button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            button.clicked.connect(callback)
+            self.action_layout.addWidget(button)
+            self.action_buttons.append(button)
+
+        self.title_layout.invalidate()
+        self.updateGeometry()
 
 
     def set_content_widget(self, custom_widget: QWidget):

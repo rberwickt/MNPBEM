@@ -6,6 +6,7 @@ from ..widgets.excitation_settings import ExcitationSettingsWidget
 from ..widgets.material_settings import MaterialOptionsWidget
 from ..widgets.structure_settings import StructureSettingsWidget
 from ..widgets.energy_range import EnergyRangeWidget
+from ..widgets.field_grid import FieldGridWidget
 from ..widgets.simulation_dialog import SimulationProgressDialog
 from pathlib import Path
 
@@ -26,6 +27,9 @@ class SimulationPage(QWidget):
 
         self.energy_range = EnergyRangeWidget(state)
         self.col_1.addWidget(self.energy_range)
+
+        self.field_grid = FieldGridWidget(state)
+        self.col_1.addWidget(self.field_grid)
         
         self.col_1.addStretch()
 
