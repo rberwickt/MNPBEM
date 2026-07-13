@@ -245,7 +245,7 @@ class SimulationState:
             },
             "compute": {
                 "n_workers": 1,
-                "n_threads": 1,
+                "n_threads": 6,
                 "n_gpus_per_worker": 0,
                 "multi_node": False
             },
@@ -467,10 +467,8 @@ class SimulationState:
         Returns:
             The Thread object (already started). You can call .join() on it if needed.
         """
-        # Prepare compute overrides to allow multi-threading
-        compute_overrides = None
-        if n_threads > 1:
-            compute_overrides = {"n_threads": n_threads}
+        # Always pass explicit thread override so runtime matches GUI request.
+        compute_overrides = {"n_threads": max(1, int(n_threads))}
         
         def _worker():
             try:

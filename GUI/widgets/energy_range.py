@@ -31,7 +31,7 @@ class EnergyRangeWidget(QGroupBox):
         #self.min_box.valueChanged.connect(self.max_box.setMinimum)
 
         self.steps_box = QSpinBox()
-        self.steps_box.setMinimum(1)
+        self.steps_box.setRange(1, 10000)
         self.steps_box.setValue(self.state.energy_steps)
         self.steps_box.valueChanged.connect(lambda val: setattr(self.state, 'energy_steps', val))
         self.layout.addRow("Steps:", self.steps_box)

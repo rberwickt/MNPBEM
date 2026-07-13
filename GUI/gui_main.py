@@ -7,7 +7,7 @@ from PySide6.QtGui import QIcon, QAction
 from pymnpbem_simulation.env_setup import setup_env
 
 # this is hard-coded for now, can change later
-setup_env(n_threads=4, n_gpus_per_worker=0)
+setup_env(n_threads=6, n_gpus_per_worker=0)
 
 
 from .simulation_state import SimulationState

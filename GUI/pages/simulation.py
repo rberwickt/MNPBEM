@@ -9,6 +9,7 @@ from ..widgets.energy_range import EnergyRangeWidget
 from ..widgets.field_grid import FieldGridWidget
 from ..widgets.simulation_dialog import SimulationProgressDialog
 from pathlib import Path
+import os
 
 
 class SimulationPage(QWidget):
@@ -87,8 +88,16 @@ class SimulationPage(QWidget):
         progress_dialog.simulation_success.connect(self.on_simulation_success)
         progress_dialog.simulation_error.connect(self.on_simulation_error)
         
+        # Run with the thread count initialized by setup_env(...) in gui_main.py.
+        # setup_env sets OMP/MKL/OPENBLAS/NUMEXPR/NUMBA thread vars together.
+        env_threads = os.environ.get("NUMBA_NUM_THREADS") or os.environ.get("OMP_NUM_THREADS")
+        try:
+            n_threads = max(1, int(env_threads)) if env_threads is not None else 1
+        except (TypeError, ValueError):
+            n_threads = 1
+
         # Run the simulation (non-blocking via threading)
-        progress_dialog.run(n_threads=1, save_outputs=False)
+        progress_dialog.run(n_threads=n_threads, save_outputs=False)
         
         # show the progress dialog (blocks until user closes it)
         progress_dialog.exec()
