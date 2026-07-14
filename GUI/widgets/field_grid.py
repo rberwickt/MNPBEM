@@ -103,14 +103,14 @@ class FieldGridWidget(QGroupBox):
         self.z_max_box.setEnabled(is_3d)
 
     def _set_planar_grid(self):
-        # Keep current z center but collapse z sampling to a single plane.
+        # Keep current z center but collapse z sampling to a single plane
         z_mid = 0.5 * (float(self.state.field_z_min) + float(self.state.field_z_max))
         self.z_min_box.setValue(z_mid)
         self.z_max_box.setValue(z_mid)
         self.nz_box.setValue(1)
 
     def _set_volumetric_grid(self):
-        # If z is collapsed, expand to a default symmetric slab.
+        # If z is collapsed, expand to a default symmetric slab
         if abs(float(self.state.field_z_max) - float(self.state.field_z_min)) < 1e-12:
             self.z_min_box.setValue(-50.0)
             self.z_max_box.setValue(50.0)

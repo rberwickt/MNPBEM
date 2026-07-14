@@ -8,6 +8,7 @@ from ..widgets.structure_settings import StructureSettingsWidget
 from ..widgets.energy_range import EnergyRangeWidget
 from ..widgets.field_grid import FieldGridWidget
 from ..widgets.simulation_dialog import SimulationProgressDialog
+from ..widgets.refractive_display import RefractiveIndexWidget
 from pathlib import Path
 import os
 
@@ -42,6 +43,9 @@ class SimulationPage(QWidget):
         self.structure_settings = StructureSettingsWidget(state)
         self.col_2.addWidget(self.structure_settings)
 
+        self.refractive_index = RefractiveIndexWidget(state)
+        self.col_2.addWidget(self.refractive_index)
+
         self.col_2.addStretch()
 
         self.col_3 = QVBoxLayout()
@@ -65,7 +69,6 @@ class SimulationPage(QWidget):
 
     def on_run_simulation_clicked(self):
         """Handle Run Simulation button click with validation"""
-        # Validate state before running
         is_valid, error_msg = self.state.validate_state()
         
         if not is_valid:
@@ -88,18 +91,18 @@ class SimulationPage(QWidget):
         progress_dialog.simulation_success.connect(self.on_simulation_success)
         progress_dialog.simulation_error.connect(self.on_simulation_error)
         
-        # Run with the thread count initialized by setup_env(...) in gui_main.py.
-        # setup_env sets OMP/MKL/OPENBLAS/NUMEXPR/NUMBA thread vars together.
+        # Run with the thread count fromsetup_env in gui_main.py TODO: switch to a config file
+        # setup_env sets OMP/MKL/OPENBLAS/NUMEXPR/NUMBA thread vars together
         env_threads = os.environ.get("NUMBA_NUM_THREADS") or os.environ.get("OMP_NUM_THREADS")
         try:
             n_threads = max(1, int(env_threads)) if env_threads is not None else 1
         except (TypeError, ValueError):
             n_threads = 1
 
-        # Run the simulation (non-blocking via threading)
+        # run the simulation (non-blocking via threading)
         progress_dialog.run(n_threads=n_threads, save_outputs=False)
         
-        # show the progress dialog (blocks until user closes it)
+        # show the progress dialog (this part is blocking)
         progress_dialog.exec()
 
     def on_simulation_success(self, result: dict):
@@ -107,7 +110,7 @@ class SimulationPage(QWidget):
         # store result in state for post-processing page access
         self.state.raw_results = result
         
-        # Show success message
+        # success message
         QMessageBox.information(
             self,
             "Simulation Complete",
@@ -129,5 +132,5 @@ class SimulationPage(QWidget):
             QMessageBox.Ok
         )
         
-        # Optionally log to console for debugging
+        # also log to console for debugging
         print(f"Simulation error: {exception}")

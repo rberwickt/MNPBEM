@@ -1,11 +1,13 @@
 from PySide6.QtWidgets import (
     QGroupBox, QFormLayout, QSpinBox, QDoubleSpinBox,
     QPushButton)
+from PySide6.QtCore import Signal
 from ..simulation_state import SimulationState
 from mnpbem.misc import EV2NM
 
 class EnergyRangeWidget(QGroupBox):
-
+    #range_changed = Signal() # notify the refractive index graph that the range has changed so it can update
+    # decided to leave this commented for now (might end up being a performance issue if they change it by holding down the arrow keys)
     def __init__(self, state: SimulationState, parent=None):
         super().__init__("Wavelength Range", parent)
         self.state = state
@@ -26,9 +28,9 @@ class EnergyRangeWidget(QGroupBox):
         self.min_box.valueChanged.connect(lambda val: setattr(self.state, 'energy_min', val))
         self.layout.addRow("Min:", self.min_box)
 
-        # this broke with conversions, but if we ever decide to remain in nm only it would work fine
-        #self.max_box.valueChanged.connect(self.min_box.setMaximum)
-        #self.min_box.valueChanged.connect(self.max_box.setMinimum)
+        # see above
+        #self.max_box.valueChanged.connect(self.range_changed.emit)
+        #self.min_box.valueChanged.connect(self.range_changed.emit)
 
         self.steps_box = QSpinBox()
         self.steps_box.setRange(1, 10000)
