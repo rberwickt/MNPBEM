@@ -48,6 +48,7 @@ class ProcessingPage(QWidget):
         self._btn_spec_run = None
         self._btn_spec_save_processed = None
         self._btn_spec_save_raw = None
+        self._spec_pol_selector = None
         self._btn_field_run = None
         self._btn_field_save_processed = None
         self._btn_field_save_raw = None
@@ -84,6 +85,11 @@ class ProcessingPage(QWidget):
         self._btn_spec_save_processed = QPushButton("Save Processed")
         self._btn_spec_save_raw = QPushButton("Save Raw")
 
+        self._spec_pol_selector = QComboBox()
+        self._spec_pol_selector.addItem("All Polarizations", userData = -1)
+        self._spec_pol_selector.setEnabled(False)
+        self._spec_pol_selector.currentIndexChanged.connect(self._on_spectrum_selector_changed)
+
         self._btn_spec_run.clicked.connect(self._run_spectrum_analysis)
         self._btn_spec_save_processed.clicked.connect(
             lambda _checked = False: self._save_processed_output("spectrum"))
@@ -93,6 +99,8 @@ class ProcessingPage(QWidget):
         action_row.addWidget(self._btn_spec_run)
         action_row.addWidget(self._btn_spec_save_processed)
         action_row.addWidget(self._btn_spec_save_raw)
+        action_row.addWidget(QLabel("View:"))
+        action_row.addWidget(self._spec_pol_selector)
         action_row.addStretch(1)
         layout.addLayout(action_row)
 
@@ -276,6 +284,7 @@ class ProcessingPage(QWidget):
         self._set_result_figure("field", None)
 
         raw = self.state.raw_results
+        self._refresh_spectrum_selector(raw)
         if raw is None:
             msg = (
                 "No simulation result loaded. Run a simulation first. "
@@ -356,11 +365,22 @@ class ProcessingPage(QWidget):
             summary = analyze_spectrum(raw)
             self.processed_outputs["spectrum"] = summary
 
-            fig = self._build_spectrum_figure(raw)
+            fig = self._build_spectrum_figure(raw, pol_idx = self._selected_spectrum_pol())
             self._spectrum_summary_label.setText(self._format_spectrum_summary(summary))
             self._set_result_figure("spectrum", fig)
         except Exception as exc:
             QMessageBox.critical(self, "Spectrum Analysis Failed", str(exc))
+
+    def _on_spectrum_selector_changed(self, _idx: int):
+        raw = self.state.raw_results
+        if raw is None or not self._has_spectrum_data(raw):
+            return
+        try:
+            fig = self._build_spectrum_figure(raw, pol_idx = self._selected_spectrum_pol())
+            self._set_result_figure("spectrum", fig)
+        except Exception:
+            # Keep UI responsive even if selection redraw fails.
+            pass
 
     def _run_field_analysis(self):
         raw = self.state.raw_results
@@ -400,7 +420,7 @@ class ProcessingPage(QWidget):
         except Exception as exc:
             QMessageBox.critical(self, "Field Analysis Failed", str(exc))
 
-    def _build_spectrum_figure(self, raw: dict) -> Figure:
+    def _build_spectrum_figure(self, raw: dict, pol_idx: int = -1) -> Figure:
         wl = np.asarray(raw["wavelength"])
         ext = np.asarray(raw["ext"])
         sca = np.asarray(raw["sca"])
@@ -410,18 +430,84 @@ class ProcessingPage(QWidget):
         ax = fig.add_subplot(111)
 
         n_pol = ext.shape[1]
-        for i in range(n_pol):
+        show_all = (pol_idx < 0) or (pol_idx >= n_pol)
+
+        if show_all:
+            for i in range(n_pol):
+                ax.plot(wl, ext[:, i], label = "ext pol {}".format(i))
+                ax.plot(wl, sca[:, i], linestyle = "--", label = "sca pol {}".format(i))
+                ax.plot(wl, abs_[:, i], linestyle = ":", label = "abs pol {}".format(i))
+        else:
+            i = int(pol_idx)
             ax.plot(wl, ext[:, i], label = "ext pol {}".format(i))
             ax.plot(wl, sca[:, i], linestyle = "--", label = "sca pol {}".format(i))
             ax.plot(wl, abs_[:, i], linestyle = ":", label = "abs pol {}".format(i))
 
+        if show_all and n_pol > 1:
+            ax.plot(
+                wl,
+                np.mean(ext, axis = 1),
+                color = "black",
+                linewidth = 2.2,
+                label = "ext avg",
+            )
+            ax.plot(
+                wl,
+                np.mean(sca, axis = 1),
+                color = "black",
+                linestyle = "--",
+                linewidth = 2.0,
+                label = "sca avg",
+            )
+            ax.plot(
+                wl,
+                np.mean(abs_, axis = 1),
+                color = "black",
+                linestyle = ":",
+                linewidth = 2.0,
+                label = "abs avg",
+            )
+
         ax.set_xlabel("Wavelength (nm)")
         ax.set_ylabel("Cross Section")
-        ax.set_title("Spectrum Overview")
+        if show_all:
+            ax.set_title("Spectrum Overview")
+        else:
+            ax.set_title("Spectrum Overview (Polarization {})".format(int(pol_idx)))
         ax.grid(True, alpha = 0.3)
         ax.legend(fontsize = 8)
         fig.tight_layout()
         return fig
+
+    def _selected_spectrum_pol(self) -> int:
+        if self._spec_pol_selector is None:
+            return -1
+        val = self._spec_pol_selector.currentData()
+        try:
+            return int(val)
+        except Exception:
+            return -1
+
+    def _refresh_spectrum_selector(self, raw: dict | None):
+        if self._spec_pol_selector is None:
+            return
+
+        self._spec_pol_selector.blockSignals(True)
+        self._spec_pol_selector.clear()
+        self._spec_pol_selector.addItem("All Polarizations", userData = -1)
+
+        n_pol = 0
+        if raw is not None and self._has_spectrum_data(raw):
+            ext = np.asarray(raw["ext"])
+            if ext.ndim >= 2:
+                n_pol = int(ext.shape[1])
+
+        for i in range(n_pol):
+            self._spec_pol_selector.addItem("Polarization {}".format(i), userData = i)
+
+        self._spec_pol_selector.setEnabled(n_pol > 0)
+        self._spec_pol_selector.setCurrentIndex(0)
+        self._spec_pol_selector.blockSignals(False)
 
     def _build_field_figure(self, field_slice: dict, meta: dict, plot_opts: dict) -> Figure:
         pos = np.asarray(field_slice["pos"])

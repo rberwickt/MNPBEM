@@ -25,6 +25,12 @@ class StructureSettingsWidget(QGroupBox):
         self.geo_mat.currentTextChanged.connect(lambda mat: self.state.materials.__setitem__(0, mat))
         form_layout.addRow("Material:", self.geo_mat)
 
+        self.refine = QSpinBox()
+        self.refine.setRange(1,100)
+        self.refine.setValue(self.state.refine)
+        self.refine.valueChanged.connect(lambda val: setattr(self.state, 'refine', val))
+        form_layout.addRow("Refine:", self.refine)
+
         self.layout.addLayout(form_layout)
 
         self.settings_group = QGroupBox("Shape Settings (Sphere)")
@@ -40,6 +46,13 @@ class StructureSettingsWidget(QGroupBox):
         self.diameter1.setValue(float(self.state.diameter))
         self.diameter1.valueChanged.connect(lambda val: setattr(self.state, 'diameter', val))
         sphere_layout.addRow("Diameter:", self.diameter1)
+        self.sphere_n_verts = QSpinBox()
+        self.sphere_n_verts.setRange(16, 200000)
+        self.sphere_n_verts.setSuffix(" vertices")
+        self.sphere_n_verts.setValue(int(self.state.sphere_n_verts))
+        self.sphere_n_verts.setToolTip("Sphere mesh resolution as trisphere vertex count.")
+        self.sphere_n_verts.valueChanged.connect(lambda val: setattr(self.state, 'sphere_n_verts', int(val)))
+        sphere_layout.addRow("Vertices:", self.sphere_n_verts)
         # Rod Settings ================================================
         self.rod_settings = QWidget()
         rod_layout = QFormLayout(self.rod_settings)
@@ -49,6 +62,15 @@ class StructureSettingsWidget(QGroupBox):
         self.diameter2.setValue(float(self.state.diameter))
         self.diameter2.valueChanged.connect(lambda val: setattr(self.state, 'diameter', val))
         rod_layout.addRow("Diameter:", self.diameter2)
+        self.rod_mesh_size = QDoubleSpinBox()
+        self.rod_mesh_size.setRange(0.1, 2000.0)
+        self.rod_mesh_size.setDecimals(2)
+        self.rod_mesh_size.setSingleStep(0.1)
+        self.rod_mesh_size.setSuffix(" nm")
+        self.rod_mesh_size.setValue(float(self.state.mesh_element_size_nm))
+        self.rod_mesh_size.setToolTip("Target element size (nm). Smaller values create finer meshes and more faces.")
+        self.rod_mesh_size.valueChanged.connect(self._on_mesh_size_changed)
+        rod_layout.addRow("Mesh Element Size:", self.rod_mesh_size)
         # connect the diameter spinners for consistency
         self.diameter1.valueChanged.connect(self.diameter2.setValue)
         self.diameter2.valueChanged.connect(self.diameter1.setValue)
@@ -69,12 +91,21 @@ class StructureSettingsWidget(QGroupBox):
         self.size_box.setValue(float(self.state.size))
         self.size_box.valueChanged.connect(lambda val: setattr(self.state, 'size', val))
         cube_layout.addRow("Size:", self.size_box)
+        self.cube_mesh_size = QDoubleSpinBox()
+        self.cube_mesh_size.setRange(0.1, 2000.0)
+        self.cube_mesh_size.setDecimals(2)
+        self.cube_mesh_size.setSingleStep(0.1)
+        self.cube_mesh_size.setSuffix(" nm")
+        self.cube_mesh_size.setValue(float(self.state.mesh_element_size_nm))
+        self.cube_mesh_size.setToolTip("Target element size (nm). Smaller values create finer meshes and more faces.")
+        self.cube_mesh_size.valueChanged.connect(self._on_mesh_size_changed)
+        cube_layout.addRow("Mesh Element Size:", self.cube_mesh_size)
 
-        self.n_per_edge = QSpinBox()
-        self.n_per_edge.setRange(1,100)
-        self.n_per_edge.setValue(int(self.state.n_per_edge))
-        self.n_per_edge.valueChanged.connect(lambda val: setattr(self.state, 'n_per_edge', val))
-        cube_layout.addRow("Divisions Per Edge:", self.n_per_edge)
+        #self.n_per_edge = QSpinBox()
+        #self.n_per_edge.setRange(1,100)
+        #self.n_per_edge.setValue(int(self.state.n_per_edge))
+        #self.n_per_edge.valueChanged.connect(lambda val: setattr(self.state, 'n_per_edge', val))
+        #cube_layout.addRow("Divisions Per Edge:", self.n_per_edge)
         # TODO: Allow for shells (using a system like the old material_dropdown widgets)
 
         self.stacked_widget.addWidget(self.sphere_settings)
@@ -103,6 +134,18 @@ class StructureSettingsWidget(QGroupBox):
             self.state.horizontal = False
         else:
             self.state.horizontal = False
+
+    def _on_mesh_size_changed(self, val: float):
+        mesh_val = float(val)
+        self.state.mesh_element_size_nm = mesh_val
+        if hasattr(self, 'rod_mesh_size') and self.rod_mesh_size.value() != mesh_val:
+            self.rod_mesh_size.blockSignals(True)
+            self.rod_mesh_size.setValue(mesh_val)
+            self.rod_mesh_size.blockSignals(False)
+        if hasattr(self, 'cube_mesh_size') and self.cube_mesh_size.value() != mesh_val:
+            self.cube_mesh_size.blockSignals(True)
+            self.cube_mesh_size.setValue(mesh_val)
+            self.cube_mesh_size.blockSignals(False)
 
     def _on_preview_clicked(self):
         dialog = StructurePreviewDialog(self.state, self)

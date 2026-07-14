@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 
 from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QLabel, QVBoxLayout,
-        QWidget)
+        QWidget, QPushButton)
 
 
 class StructurePreviewDialog(QDialog):
@@ -11,6 +11,7 @@ class StructurePreviewDialog(QDialog):
         super().__init__(parent)
         self.state = state
         self.plotter = None
+        self._initial_camera_position = None
 
         self.setWindowTitle('Structure Mesh Preview')
         self.resize(960, 720)
@@ -27,9 +28,28 @@ class StructurePreviewDialog(QDialog):
 
         self.button_box = QDialogButtonBox(QDialogButtonBox.Close)
         self.button_box.rejected.connect(self.reject)
+
+        self.reset_button = QPushButton("Reset View")
+        self.reset_button.clicked.connect(self.reset_view)
+        self.button_box.addButton(self.reset_button, QDialogButtonBox.ActionRole)
+
         self.layout.addWidget(self.button_box)
 
         self._build_preview_scene()
+
+    def reset_view(self):
+        """Re-centers the camera view to the initial position."""
+        if self.plotter is not None:
+            if self._initial_camera_position is not None:
+                self.plotter.camera_position = self._initial_camera_position
+            else:
+                self.plotter.reset_camera()
+
+            reset_clip = getattr(self.plotter, 'reset_camera_clipping_range', None)
+            if callable(reset_clip):
+                reset_clip()
+
+            self.plotter.render()  # Forces the interactor to redraw the scene immediately
 
     def _build_preview_scene(self):
         try:
@@ -72,6 +92,9 @@ class StructurePreviewDialog(QDialog):
             self.plotter.add_axes()
             self.plotter.show_grid()
             self.plotter.reset_camera()
+            camera_position = self.plotter.camera_position
+            if camera_position is not None:
+                self._initial_camera_position = tuple(tuple(v) for v in camera_position)
             self.status_label.setText(
                     'Preview ready: {} vertices, {} faces'.format(
                             mesh.n_points,

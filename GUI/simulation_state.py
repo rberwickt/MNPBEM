@@ -54,7 +54,8 @@ class SimulationState:
     environment_material: Optional[str] = None                    # 
     substrate_material: Optional[str] = None
 
-    mesh_density: int = 3 # nm density, sim code said to not let end user change this, but we can leave it in for now
+    sphere_n_verts: int = 256 # sphere discretization target (trisphere vertex count)
+    mesh_element_size_nm: float = 5.0 # rod/cube element size in nm (smaller = finer mesh / more faces)
     refine: int = 2 # same as mesh density
     interp: str = "curv" # was present in many structure configs, unsure of use so leaving it in the state for edge cases
 
@@ -66,8 +67,8 @@ class SimulationState:
     height: float = 80.0
             # cube
     size: float = 30.0
-    cube_e: float = 0.25 # TODO: look into meaning of this
-    n_per_edge: int = 16 # cube equivalent of mesh density (bears same restriction worries)
+    cube_e: float = 0.25 
+    n_per_edge: int = 16 # cube equivalent of mesh density (seems to be overridden by mesh density?)
     
 
     # Excitation Setttings ============================================
@@ -78,6 +79,13 @@ class SimulationState:
     #polarization: str = "p"
     #polarization_angle: int = 15 # (degrees)
             # Polarization Vectors and Direction
+    plane_wave_polarizations: list[list[int]] = field(
+        default_factory = lambda: [[1, 0, 0]]
+    )
+    plane_wave_propagation_dirs: list[list[int]] = field(
+        default_factory = lambda: [[0, 0, 1]]
+    )
+
     pol_x: int = 1
     pol_y: int = 0
     pol_z: int = 0
@@ -100,7 +108,90 @@ class SimulationState:
     dipole_pos_y: int = 0 # (nm)
     dipole_pos_z: int = 20 # (nm)
 
-    
+    def get_plane_wave_polarizations(self) -> list[list[int]]:
+        pols = getattr(self, "plane_wave_polarizations", None)
+        if isinstance(pols, list) and len(pols) > 0:
+            normalized = []
+            for pol in pols:
+                if isinstance(pol, (list, tuple)) and len(pol) >= 3:
+                    normalized.append([
+                        int(pol[0]),
+                        int(pol[1]),
+                        int(pol[2]),
+                    ])
+            if len(normalized) > 0:
+                return normalized
+
+        return [[int(self.pol_x), int(self.pol_y), int(self.pol_z)]]
+
+    def get_plane_wave_propagation_dirs(self) -> list[list[int]]:
+        dirs = getattr(self, "plane_wave_propagation_dirs", None)
+        if isinstance(dirs, list) and len(dirs) > 0:
+            normalized = []
+            for direction in dirs:
+                if isinstance(direction, (list, tuple)) and len(direction) >= 3:
+                    normalized.append([
+                        int(direction[0]),
+                        int(direction[1]),
+                        int(direction[2]),
+                    ])
+            if len(normalized) > 0:
+                return normalized
+
+        return [[int(self.pol_dir_x), int(self.pol_dir_y), int(self.pol_dir_z)]]
+
+    def set_plane_wave_polarizations(self, polarizations: list[list[int]]) -> None:
+        normalized = []
+        for pol in polarizations:
+            if isinstance(pol, (list, tuple)) and len(pol) >= 3:
+                normalized.append([
+                    int(pol[0]),
+                    int(pol[1]),
+                    int(pol[2]),
+                ])
+
+        if len(normalized) == 0:
+            normalized = [[1, 0, 0]]
+
+        self.plane_wave_polarizations = normalized
+
+        first = normalized[0]
+        self.pol_x = int(first[0])
+        self.pol_y = int(first[1])
+        self.pol_z = int(first[2])
+
+    def set_plane_wave_propagation_dirs(self, propagation_dirs: list[list[int]]) -> None:
+        normalized = []
+        for direction in propagation_dirs:
+            if isinstance(direction, (list, tuple)) and len(direction) >= 3:
+                normalized.append([
+                    int(direction[0]),
+                    int(direction[1]),
+                    int(direction[2]),
+                ])
+
+        if len(normalized) == 0:
+            normalized = [[0, 0, 1]]
+
+        self.plane_wave_propagation_dirs = normalized
+
+        first = normalized[0]
+        self.pol_dir_x = int(first[0])
+        self.pol_dir_y = int(first[1])
+        self.pol_dir_z = int(first[2])
+
+    def _plane_wave_pairs(self) -> list[tuple[list[int], list[int]]]:
+        polarizations = self.get_plane_wave_polarizations()
+        propagation_dirs = self.get_plane_wave_propagation_dirs()
+
+        if len(propagation_dirs) < len(polarizations):
+            last_dir = propagation_dirs[-1] if len(propagation_dirs) > 0 else [0, 0, 1]
+            propagation_dirs = propagation_dirs + [list(last_dir) for _ in range(len(polarizations) - len(propagation_dirs))]
+        elif len(propagation_dirs) > len(polarizations):
+            propagation_dirs = propagation_dirs[:len(polarizations)]
+
+        return list(zip(polarizations, propagation_dirs))
+
 
     def validate_state(self) -> tuple[bool, str]:
         """Validate that the simulation state is ready to run.
@@ -130,6 +221,21 @@ class SimulationState:
 
         if self.field_nz > 1 and self.field_z_min >= self.field_z_max:
             return False, "Field grid z_min must be less than z_max when nz > 1"
+
+        if self.excitation_source == "Plane Wave" and len(self.get_plane_wave_polarizations()) < 1:
+            return False, "At least one plane-wave polarization must be configured"
+
+        if self.excitation_source == "Plane Wave":
+            for idx, (polarization, direction) in enumerate(self._plane_wave_pairs(), start = 1):
+                if polarization == [0, 0, 0]:
+                    return False, "Plane-wave polarization {} cannot be the zero vector".format(idx)
+                if direction == [0, 0, 0]:
+                    return False, "Plane-wave propagation direction {} cannot be the zero vector".format(idx)
+                if sum(int(a) * int(b) for a, b in zip(polarization, direction)) != 0:
+                    return False, (
+                        "Plane-wave polarization {} must be orthogonal to its propagation direction"
+                        .format(idx)
+                    )
         
         return True, ""
 
@@ -182,20 +288,24 @@ class SimulationState:
         medium_name = self.environment_material or "vacuum"
 
         # build structure block
-        struct_block: dict[str, Any] = {"type": structure_type, "mesh_density": float(self.mesh_density), "refine": int(self.refine), "interp": self.interp}
+        struct_block: dict[str, Any] = {"type": structure_type, "refine": int(self.refine), "interp": self.interp}
         # shape-specific params
         if structure_type == "sphere":
             struct_block["diameter"] = float(self.diameter)
+            struct_block["n_verts"] = int(self.sphere_n_verts)
         elif structure_type == "rod":
             struct_block["diameter"] = float(self.diameter)
             struct_block["height"] = float(self.height)
             struct_block["horizontal"] = bool(self.horizontal)
+            struct_block["mesh_density"] = float(self.mesh_element_size_nm)
         elif structure_type == "cube":
             struct_block["size"] = float(self.size)
             struct_block["n_per_edge"] = int(self.n_per_edge)
+            struct_block["mesh_density"] = float(self.mesh_element_size_nm)
         else:
             # generic
             struct_block["diameter"] = float(self.diameter)
+            struct_block["mesh_density"] = float(self.mesh_element_size_nm)
 
         if output_dir is None:
             output_dir = str(Path(".") / "tmp")
@@ -221,11 +331,15 @@ class SimulationState:
             }
         }
 
+        plane_wave_pairs = self._plane_wave_pairs()
+        plane_wave_polarizations = [list(pol) for pol, _direction in plane_wave_pairs]
+        propagation_dirs = [list(direction) for _pol, direction in plane_wave_pairs]
+
         # excitation-specific parameters
         if self.excitation_source == "Plane Wave":
             sim_config["excitation"] = "planewave"
-            sim_config["polarizations"] = [[self.pol_x, self.pol_y, self.pol_z]]
-            sim_config["propagation_dirs"] = [[self.pol_dir_x, self.pol_dir_y, self.pol_dir_z]]
+            sim_config["polarizations"] = plane_wave_polarizations
+            sim_config["propagation_dirs"] = propagation_dirs
         elif self.excitation_source == "Electron Beam":
             sim_config["excitation"] = "eels"
             sim_config["impact_parameter"] = float(self.impact_parameter)
@@ -238,8 +352,8 @@ class SimulationState:
         else:
             # default to planewave
             sim_config["excitation"] = "planewave"
-            sim_config["polarizations"] = [[self.pol_x, self.pol_y, self.pol_z]]
-            sim_config["propagation_dirs"] = [[self.pol_dir_x, self.pol_dir_y, self.pol_dir_z]]
+            sim_config["polarizations"] = plane_wave_polarizations
+            sim_config["propagation_dirs"] = propagation_dirs
 
         cfg = {
             "structure": struct_block,
