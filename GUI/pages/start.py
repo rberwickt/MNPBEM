@@ -1,15 +1,16 @@
 # page_two.py
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QPushButton, QLabel, QScrollArea, QHBoxLayout, QGroupBox
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QPushButton, QLabel, QScrollArea, QHBoxLayout, QGroupBox, QFormLayout, QSpinBox, QMessageBox
 from PySide6.QtCore import Signal, QFileSystemWatcher, QUrl, Qt
 from PySide6.QtGui import QDesktopServices
+
 from ..simulation_state import SimulationState
 from pathlib import Path
-import importlib, sys
+
+
 class StartPage(QWidget):
     settings_completed = Signal()  # Alert main.py when simulation finishes
     USER_DIR = Path(__file__).parent.parent / "user-defined"
     MAT_DIR = USER_DIR / "materials"
-    CALC_DIR = USER_DIR / "calculations"
 
     def __init__(self, state: SimulationState):
         super().__init__()
@@ -18,8 +19,6 @@ class StartPage(QWidget):
         self.layout = QVBoxLayout(self)
         self.displays_layout = QHBoxLayout()
         # initialize everything for the user defined content imports
-        self.calc_watcher = QFileSystemWatcher(self)
-        self.calc_watcher.directoryChanged.connect(self.load_calculations)
 
         self.mat_watcher = QFileSystemWatcher(self)
         self.mat_watcher.directoryChanged.connect(self.load_materials)
@@ -27,17 +26,14 @@ class StartPage(QWidget):
         self.user_path = self.USER_DIR.resolve()
         self.user_path.mkdir(parents=True, exist_ok=True)
 
-        self.calc_path = self.CALC_DIR.resolve()
-        self.calc_path.mkdir(parents=True, exist_ok=True)
 
         self.mat_path = self.MAT_DIR.resolve()
         self.mat_path.mkdir(parents=True, exist_ok=True)
     
         self.user_url = QUrl.fromLocalFile(str(self.user_path))
-        self.calc_url = QUrl.fromLocalFile(str(self.calc_path))
+        
         self.mat_url = QUrl.fromLocalFile(str(self.mat_path))
 
-        self.calc_watcher.addPath(str(self.calc_path)) # watch for added files so that we can update dynamically
         self.mat_watcher.addPath(str(self.mat_path)) # watch for added files so that we can update dynamically
 
         # actual GUI of state page
@@ -55,27 +51,34 @@ class StartPage(QWidget):
         mat_group_layout.addWidget(self.mat_display)
         self.displays_layout.addWidget(self.mat_group)
 
-        self.calc_display = QScrollArea()
-        self.calc_display.setWidgetResizable(True)  # allows inner widgets to scale
-        #self.calc_display.setFixedHeight(300)       # fixes the height so it won't grow instead of the inner widgets
-        self.calc_display.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.calc_content = QWidget()
-        self.calc_layout = QVBoxLayout(self.calc_content)
-        self.calc_layout.setAlignment(Qt.AlignTop)
 
-        self.calc_display.setWidget(self.calc_content)
-        self.calc_group = QGroupBox("Loaded Calculations:")
-        calc_group_layout = QVBoxLayout(self.calc_group)
-        calc_group_layout.addWidget(self.calc_display)
-        self.displays_layout.addWidget(self.calc_group)
-
-        self.layout.addWidget(QLabel("Non-local pairs not yet supported! (returns more than one callable)"))
+        self.layout.addWidget(QLabel("Non-local pairs not yet supported (returns more than one callable)"))
         self.layout.addWidget(QLabel("See user-defined/materials/vacuum.py for example function header"))
         # could try an elif and name the function in the materials file something different if it returns more than one callable? 
         #   question for later: will it only ever be 1 or 2 callables returned?
+
+        self.env_group = QGroupBox("Environment Setup")
+        env_layout = QFormLayout(self.env_group)
+
+        self.n_workers_input = QSpinBox()
+        self.n_workers_input.setRange(1, 256)
+        self.n_workers_input.setValue(int(getattr(self.state, "env_n_workers", 1)))
+
+        self.n_threads_input = QSpinBox()
+        self.n_threads_input.setRange(1, 512)
+        self.n_threads_input.setValue(int(getattr(self.state, "env_n_threads", 6)))
+
+        self.n_gpus_input = QSpinBox()
+        self.n_gpus_input.setRange(0, 16)
+        self.n_gpus_input.setValue(int(getattr(self.state, "env_n_gpus_per_worker", 0)))
+
+        env_layout.addRow("Workers", self.n_workers_input)
+        env_layout.addRow("Threads", self.n_threads_input)
+        env_layout.addRow("GPUs per worker", self.n_gpus_input)
+
+        self.layout.addWidget(self.env_group)
         self.layout.addLayout(self.displays_layout)
 
-        self.load_calculations()
         self.load_materials()
 
         self.open_folder_btn = QPushButton("Open User-Defined Content Folder")
@@ -89,8 +92,6 @@ class StartPage(QWidget):
         QDesktopServices.openUrl(self.user_url)
 
     
-    def load_calculations(self):
-        pass
     def load_materials(self):
         self.state.loaded_dielectrics.clear()
         self.state.material_descriptors.clear()
@@ -111,20 +112,9 @@ class StartPage(QWidget):
                     }
 
                 elif file_path.suffix == '.py':
-                    # optional validation import
-                    spec = importlib.util.spec_from_file_location(module_name, str(file_path))
-                    if spec is None or spec.loader is None:
-                        continue
-                    module = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(module)
-
-                    if not hasattr(module, "generate_eps_func"):
-                        continue
-
-                    test_obj = module.generate_eps_func()
-                    if not callable(test_obj):
-                        continue
-
+                    # Register module path only; do not import here.
+                    # Some user modules import mnpbem, and importing them on Start
+                    # would violate setup_env-before-mnpbem ordering.
                     self.state.loaded_dielectrics.append(module_name)
                     self.state.material_descriptors[module_name] = {
                         "type": "python_module",
@@ -142,10 +132,31 @@ class StartPage(QWidget):
         self._clear_layout(self.mat_layout)
         for material in self.state.loaded_dielectrics:
             self.mat_layout.addWidget(QLabel(material))
-    def update_calculation_list(self):
-        self._clear_layout(self.calc_layout)
 
     def finish_loading(self):
+        # Configure runtime environment before any mnpbem-dependent pages are created.
+        n_workers = int(self.n_workers_input.value())
+        n_threads = int(self.n_threads_input.value())
+        n_gpus_per_worker = int(self.n_gpus_input.value())
+
+        try:
+            from pymnpbem_simulation.env_setup import assert_pre_import, setup_env
+
+            assert_pre_import()
+            setup_env(n_threads = n_threads, n_gpus_per_worker = n_gpus_per_worker)
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Environment Setup Failed",
+                "Failed to configure environment before simulation imports:\n\n{}".format(exc),
+                QMessageBox.Ok
+            )
+            return
+
+        self.state.env_n_workers = n_workers
+        self.state.env_n_threads = n_threads
+        self.state.env_n_gpus_per_worker = n_gpus_per_worker
+
         # load all of the modules into the state and progress onto simulation
         self.settings_completed.emit()
     

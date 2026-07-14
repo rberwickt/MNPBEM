@@ -1,9 +1,10 @@
 from PySide6.QtWidgets import (QGroupBox, QFormLayout, QComboBox, QTabWidget, 
-                               QWidget, QVBoxLayout, QHBoxLayout, QDoubleSpinBox, QSpinBox, QCheckBox, QStackedWidget)
+                               QWidget, QVBoxLayout, QHBoxLayout, QDoubleSpinBox, QSpinBox, QCheckBox, QStackedWidget, QPushButton)
 from PySide6.QtCore import Qt, Signal
 #from PySide6.QtGui import QIntValidator
 from ..simulation_state import SimulationState
 from .material_dropdown import MaterialComboBox
+from .structure_view import StructurePreviewDialog
 class StructureSettingsWidget(QGroupBox):
     def __init__(self, state: SimulationState, parent=None):
         super().__init__("Structure Settings", parent)
@@ -36,6 +37,7 @@ class StructureSettingsWidget(QGroupBox):
         self.diameter1 = QDoubleSpinBox()
         self.diameter1.setRange(1.0, 2000.0)
         self.diameter1.setSuffix(" nm")
+        self.diameter1.setValue(float(self.state.diameter))
         self.diameter1.valueChanged.connect(lambda val: setattr(self.state, 'diameter', val))
         sphere_layout.addRow("Diameter:", self.diameter1)
         # Rod Settings ================================================
@@ -44,6 +46,7 @@ class StructureSettingsWidget(QGroupBox):
         self.diameter2 = QDoubleSpinBox()
         self.diameter2.setRange(1.0, 2000.0)
         self.diameter2.setSuffix(" nm")
+        self.diameter2.setValue(float(self.state.diameter))
         self.diameter2.valueChanged.connect(lambda val: setattr(self.state, 'diameter', val))
         rod_layout.addRow("Diameter:", self.diameter2)
         # connect the diameter spinners for consistency
@@ -53,6 +56,8 @@ class StructureSettingsWidget(QGroupBox):
         self.height_box = QDoubleSpinBox()
         self.height_box.setRange(1.0, 2000.0)
         self.height_box.setSuffix(" nm")
+        self.height_box.setValue(float(self.state.height))
+        self.height_box.valueChanged.connect(lambda val: setattr(self.state, 'height', val))
         rod_layout.addRow("Height:", self.height_box)
         
         # Cube Settings ===============================================
@@ -61,10 +66,14 @@ class StructureSettingsWidget(QGroupBox):
         self.size_box = QDoubleSpinBox()
         self.size_box.setRange(1.0, 2000.0)
         self.size_box.setSuffix(" nm")
+        self.size_box.setValue(float(self.state.size))
+        self.size_box.valueChanged.connect(lambda val: setattr(self.state, 'size', val))
         cube_layout.addRow("Size:", self.size_box)
 
         self.n_per_edge = QSpinBox()
         self.n_per_edge.setRange(1,100)
+        self.n_per_edge.setValue(int(self.state.n_per_edge))
+        self.n_per_edge.valueChanged.connect(lambda val: setattr(self.state, 'n_per_edge', val))
         cube_layout.addRow("Divisions Per Edge:", self.n_per_edge)
         # TODO: Allow for shells (using a system like the old material_dropdown widgets)
 
@@ -72,6 +81,12 @@ class StructureSettingsWidget(QGroupBox):
         self.stacked_widget.addWidget(self.rod_settings)
         self.stacked_widget.addWidget(self.cube_settings)
         self.layout.addWidget(self.settings_group)
+
+        self.preview_btn = QPushButton("Preview Mesh")
+        self.preview_btn.clicked.connect(self._on_preview_clicked)
+        self.layout.addWidget(self.preview_btn)
+
+        self._on_geo_changed(self.state.structure)
 
     def _on_geo_changed(self, text: str):
         self.state.structure = text
@@ -85,4 +100,11 @@ class StructureSettingsWidget(QGroupBox):
         elif text == "Cube":
             self.settings_group.setTitle("Shape Settings (Cube)")
             self.stacked_widget.setCurrentIndex(2)
+            self.state.horizontal = False
+        else:
+            self.state.horizontal = False
+
+    def _on_preview_clicked(self):
+        dialog = StructurePreviewDialog(self.state, self)
+        dialog.exec()
         

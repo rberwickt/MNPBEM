@@ -1,7 +1,7 @@
 # stores all of the data so that it can be easily passed between screens/functions
 from dataclasses import dataclass, field
 from typing import Any, Optional, Callable, Dict
-from mnpbem.misc import EV2NM
+
 import traceback
 from pathlib import Path
 import threading
@@ -22,6 +22,11 @@ class SimulationState:
     raw_results: Optional[Any] = None               # Simulation output (Sigma)
 
     solver: str = "Retarded"
+
+    # Runtime environment setup (must be configured before mnpbem import)
+    env_n_workers: int = 1
+    env_n_threads: int = 6
+    env_n_gpus_per_worker: int = 0
 
     # Energy Range Settings ===========================================
     energy_in_nm: bool = True
@@ -161,6 +166,7 @@ class SimulationState:
             # fallback: use lowercase raw value
             structure_type = s_type
 
+        from mnpbem.misc import EV2NM
         nm_min = float(self.energy_min)
         nm_max = float(self.energy_max)
         if not self.energy_in_nm:
@@ -244,9 +250,9 @@ class SimulationState:
                 "refractive_index_paths": self.material_descriptors
             },
             "compute": {
-                "n_workers": 1,
-                "n_threads": 6,
-                "n_gpus_per_worker": 0,
+                "n_workers": max(1, int(self.env_n_workers)),
+                "n_threads": max(1, int(self.env_n_threads)),
+                "n_gpus_per_worker": max(0, int(self.env_n_gpus_per_worker)),
                 "multi_node": False
             },
             "output": {

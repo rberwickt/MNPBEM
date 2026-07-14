@@ -4,16 +4,10 @@ from pathlib import Path
 from PySide6.QtWidgets import (QApplication, QMainWindow, QStackedWidget, QToolBar)
 from PySide6.QtGui import QIcon, QAction
 
-from pymnpbem_simulation.env_setup import setup_env
-
-# this is hard-coded for now, can change later
-setup_env(n_threads=6, n_gpus_per_worker=0)
 
 
 from .simulation_state import SimulationState
 from .pages.start import StartPage
-from .pages.simulation import SimulationPage
-from .pages.post_processing import ProcessingPage
 from .widgets.state_dialog import StateDebugDialog
 
 # Import all the pages here
@@ -35,12 +29,10 @@ class MainController(QMainWindow):
         self.state = SimulationState() # this is where all the data gets stored (may become RAM heavy when it stores the sim data)
 
         self.page1 = StartPage(self.state)
-        self.page2 = SimulationPage(self.state)
-        self.page3 = ProcessingPage(self.state)
+        self.page2 = None
+        self.page3 = None
 
         self.stacked_widget.addWidget(self.page1)
-        self.stacked_widget.addWidget(self.page2)
-        self.stacked_widget.addWidget(self.page3)
 
         self.toolbar = QToolBar("Debug Toolbar")
         self.addToolBar(self.toolbar)
@@ -51,12 +43,27 @@ class MainController(QMainWindow):
         self.toolbar.addAction(state_action)
 
         self.page1.settings_completed.connect(self.go_to_sim)
+    def _ensure_runtime_pages(self):
+        if self.page2 is not None and self.page3 is not None:
+            return
+
+        # Import lazily so StartPage can run setup_env before backend imports.
+        from .pages.simulation import SimulationPage
+        from .pages.post_processing import ProcessingPage
+
+        self.page2 = SimulationPage(self.state)
+        self.page3 = ProcessingPage(self.state)
+
+        self.stacked_widget.addWidget(self.page2)
+        self.stacked_widget.addWidget(self.page3)
         self.page2.sim_completed.connect(self.go_to_post)
 
     def go_to_sim(self):
+        self._ensure_runtime_pages()
         self.page2.setup_ui_from_state()  # not really using this, but could be useful later (so leaving it in)
         self.stacked_widget.setCurrentWidget(self.page2)
     def go_to_post(self):
+        self._ensure_runtime_pages()
         self.page3.setup_ui_from_state()
         self.stacked_widget.setCurrentWidget(self.page3)
     def toolbar_view_state(self): # freezes up the main window (close when done)
