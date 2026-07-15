@@ -207,6 +207,27 @@ class ProcessingPage(QWidget):
         vector_density.setRange(1, 32)
         vector_density.setValue(4)
 
+        manual_log_bounds = QCheckBox("Use manual log bounds")
+        manual_log_bounds.setChecked(False)
+
+        log_vmin = QDoubleSpinBox()
+        log_vmin.setRange(1e-20, 1e20)
+        log_vmin.setDecimals(8)
+        log_vmin.setSingleStep(0.1)
+        log_vmin.setValue(1e-6)
+        log_vmin.setEnabled(False)
+
+        log_vmax = QDoubleSpinBox()
+        log_vmax.setRange(1e-20, 1e20)
+        log_vmax.setDecimals(8)
+        log_vmax.setSingleStep(0.1)
+        log_vmax.setValue(1.0)
+        log_vmax.setEnabled(False)
+
+        manual_log_bounds.toggled.connect(
+            lambda checked: self._set_log_bounds_controls_enabled(bool(checked), log_vmin, log_vmax)
+        )
+
         hotspot_quantile = QDoubleSpinBox()
         hotspot_quantile.setRange(0.50, 0.9999)
         hotspot_quantile.setDecimals(4)
@@ -243,8 +264,13 @@ class ProcessingPage(QWidget):
 
         row3 = 3
         grid.addWidget(vector_overlay, row3, 0, 1, 3)
+        grid.addWidget(manual_log_bounds, row3, 3, 1, 2)
+        grid.addWidget(QLabel("Log vmin"), row3, 5)
+        grid.addWidget(log_vmin, row3, 6)
+        grid.addWidget(QLabel("Log vmax"), row3, 7)
+        grid.addWidget(log_vmax, row3, 8)
 
-        for col in range(8):
+        for col in range(9):
             grid.setColumnStretch(col, 1 if col % 2 == 1 else 0)
 
         opts_layout.addLayout(grid)
@@ -263,6 +289,9 @@ class ProcessingPage(QWidget):
             "vector_overlay": vector_overlay,
             "vector_density": vector_density,
             "hotspot_quantile": hotspot_quantile,
+            "manual_log_bounds": manual_log_bounds,
+            "log_vmin": log_vmin,
+            "log_vmax": log_vmax,
         }
 
         layout.addWidget(opts)
@@ -408,11 +437,34 @@ class ProcessingPage(QWidget):
                 threshold_quantile = float(plot_opts["hotspot_quantile"]),
             )
 
+            # percentiles of graph 
+            pos = np.asarray(field_slice["pos"])
+            e = np.asarray(field_slice["e"])
+            intensity = self._compute_intensity(e)
+            
+            slice_axis = str(plot_opts.get("slice_axis", "z")).lower()
+            slice_value = float(plot_opts.get("slice_value", 0.0))
+            _, _, int_u, _ = self._slice_points(
+                pos, e, intensity, axis = slice_axis, value = slice_value
+            )
+            
+            valid = int_u[np.isfinite(int_u)]
+            if valid.size == 0:
+                valid = np.asarray([0.0], dtype=float)
+                
+            p_low_pct = float(plot_opts.get("p_low", 2.0))
+            p_high_pct = float(plot_opts.get("p_high", 99.5))
+            
+            actual_low_val = float(np.percentile(valid, p_low_pct))
+            actual_high_val = float(np.percentile(valid, p_high_pct))
+
             payload = {
                 "metadata": meta,
                 "statistics": stats,
                 "hotspots": hotspots,
                 "plot_options": plot_opts,
+                "actual_low_val": actual_low_val,
+                "actual_high_val": actual_high_val,
             }
             self.processed_outputs["field"] = payload
 
@@ -421,6 +473,8 @@ class ProcessingPage(QWidget):
             self._set_result_figure("field", fig)
         except Exception as exc:
             QMessageBox.critical(self, "Field Analysis Failed", str(exc))
+
+    
 
     def _build_spectrum_figure(self, raw: dict, pol_idx: int = -1) -> Figure:
         wl = np.asarray(raw["wavelength"])
@@ -529,6 +583,13 @@ class ProcessingPage(QWidget):
 
         return self._build_field_figure_2d(pos, e, intensity, meta, plot_opts)
 
+    def _set_log_bounds_controls_enabled(self,
+            enabled: bool,
+            log_vmin_ctrl: QDoubleSpinBox,
+            log_vmax_ctrl: QDoubleSpinBox):
+        log_vmin_ctrl.setEnabled(enabled)
+        log_vmax_ctrl.setEnabled(enabled)
+
     def _compute_intensity(self, e: np.ndarray) -> np.ndarray:
         e2 = np.sum(np.abs(e) ** 2, axis = -1)
         while e2.ndim > 1:
@@ -630,7 +691,6 @@ class ProcessingPage(QWidget):
         yi = np.linspace(y.min(), y.max(), grid_res)
         XI, YI = np.meshgrid(xi, yi)
 
-        # Interpolate using linear to prevent ringing around the edge of the square hole
         interp_method = str(plot_opts.get("interpolation_method", "linear"))
         intensity_grid = griddata((x_clean, y_clean), int_clean, (XI, YI), method=interp_method)
         
@@ -690,12 +750,17 @@ class ProcessingPage(QWidget):
 
         pos_valid = int_u[int_u > 0]
         if log_scale and pos_valid.size > 0:
-            if clip_percentile:
-                lvmin = max(float(np.percentile(pos_valid, p_low)), 1e-12)
-                lvmax = float(np.percentile(pos_valid, p_high))
+            use_manual_log_bounds = bool(plot_opts.get("manual_log_bounds", False))
+            if use_manual_log_bounds:
+                lvmin = max(float(plot_opts.get("log_vmin", 1e-12)), 1e-12)
+                lvmax = float(plot_opts.get("log_vmax", lvmin * 10.0))
             else:
-                lvmin = max(float(np.min(pos_valid)), 1e-12)
-                lvmax = float(np.max(pos_valid))
+                if clip_percentile:
+                    lvmin = max(float(np.percentile(pos_valid, p_low)), 1e-12)
+                    lvmax = float(np.percentile(pos_valid, p_high))
+                else:
+                    lvmin = max(float(np.min(pos_valid)), 1e-12)
+                    lvmax = float(np.max(pos_valid))
             if lvmax <= lvmin:
                 lvmax = lvmin * 10.0
             norm = LogNorm(vmin = lvmin, vmax = lvmax)
@@ -795,6 +860,7 @@ class ProcessingPage(QWidget):
         fig.tight_layout()
         return fig
 
+    # TODO: make this like the field summary rework
     def _format_spectrum_summary(self, summary: dict) -> str:
         lines = [
             "n_wavelengths: {}".format(summary.get("n_wavelengths", "?")),
@@ -820,21 +886,22 @@ class ProcessingPage(QWidget):
         hot = payload.get("hotspots", dict())
         meta = payload.get("metadata", dict())
         opts = payload.get("plot_options", dict())
+        
+        # Safely pull the calculated actual values
+        v_low_val = payload.get("actual_low_val", 0.0)
+        v_high_val = payload.get("actual_high_val", 0.0)
 
-        lines = [
-            "wavelength_nm: {:.3f}".format(float(meta.get("wavelength_nm", 0.0))),
-            "polarization_idx: {}".format(int(meta.get("polarization_idx", 0))),
-            "view_mode: {}".format(opts.get("view_mode", "auto")),
-            "slice: {} = {:.3f} nm".format(
-                opts.get("slice_axis", "z"), float(opts.get("slice_value", 0.0))),
-            "max |E|^2: {:.6g}".format(float(stats.get("max", 0.0))),
-            "mean |E|^2: {:.6g}".format(float(stats.get("mean", 0.0))),
-            "p99 |E|^2: {:.6g}".format(float(stats.get("percentile_99", 0.0))),
-            "hotspots (q={:.4f}): {}".format(
-                float(opts.get("hotspot_quantile", 0.99)), int(hot.get("n_hotspots", 0))),
-            "hotspot max intensity: {:.6g}".format(float(hot.get("max_intensity", 0.0))),
+        parts = [
+            "<b>Wavelength:</b> {:.2f} nm".format(float(meta.get("wavelength_nm", 0.0))),
+            "<b>Pol:</b> {}".format(int(meta.get("polarization_idx", 0))),
+            "<b>Slice:</b> {} = {:.2f} nm".format(opts.get("slice_axis", "z"), float(opts.get("slice_value", 0.0))),
+            "<b>Clip Range:</b> [{:.4g} to {:.4g}]".format(v_low_val, v_high_val), # Shows the real values
+            "<b>Max |E|²:</b> {:.4g}".format(float(stats.get("max", 0.0))),
+            "<b>Mean |E|²:</b> {:.4g}".format(float(stats.get("mean", 0.0))),
+            "<b>P99 |E|²:</b> {:.4g}".format(float(stats.get("percentile_99", 0.0))),
+            "<b>Hotspots (q={:.4f}):</b> {}".format(float(opts.get("hotspot_quantile", 0.99)), int(hot.get("n_hotspots", 0))),
         ]
-        return "\n".join(lines)
+        return " &nbsp;&nbsp;|&nbsp;&nbsp; ".join(parts)
 
     def _extract_field_slice(self, raw: dict, wl_idx: int = 0, pol_idx: int = 0):
         e = np.asarray(raw["e"])
@@ -902,6 +969,9 @@ class ProcessingPage(QWidget):
                 "vector_overlay": False,
                 "vector_density": 4,
                 "hotspot_quantile": 0.99,
+                "manual_log_bounds": False,
+                "log_vmin": 1e-6,
+                "log_vmax": 1.0,
             }
 
         p_low = float(c["p_low"].value())
@@ -923,6 +993,9 @@ class ProcessingPage(QWidget):
             "vector_overlay": bool(c["vector_overlay"].isChecked()),
             "vector_density": int(c["vector_density"].value()),
             "hotspot_quantile": float(c["hotspot_quantile"].value()),
+            "manual_log_bounds": bool(c["manual_log_bounds"].isChecked()),
+            "log_vmin": float(c["log_vmin"].value()),
+            "log_vmax": float(c["log_vmax"].value()),
         }
 
     def _save_processed_output(self, kind: str):
