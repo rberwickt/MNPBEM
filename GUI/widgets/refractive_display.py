@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import (QGroupBox, QFormLayout, QHBoxLayout, QCheckBox, QVBoxLayout, QLabel, QPushButton)
+from PySide6.QtWidgets import (QGroupBox, QFormLayout, QHBoxLayout, QCheckBox, QVBoxLayout, QLabel, QPushButton, QComboBox)
 from PySide6.QtCore import Qt
 import numpy as np
 import importlib.util
@@ -26,8 +26,13 @@ class RefractiveIndexWidget(QGroupBox):
         title_bar.addWidget(QLabel("Material:"))
         title_bar.addWidget(self.material_dropdown)
 
+        self.eps_select = QComboBox()
+        self.eps_select.addItems(["Real", "Imaginary", "Both"])
+        self.eps_select.currentTextChanged.connect(self.update_plot)
+
         self.refresh_btn = QPushButton("Refresh Plot")
         self.refresh_btn.clicked.connect(self.update_plot)
+        title_bar.addWidget(self.eps_select)
         title_bar.addWidget(self.refresh_btn)
 
         self.layout.addLayout(title_bar)
@@ -67,8 +72,13 @@ class RefractiveIndexWidget(QGroupBox):
         # figure building
         fig = Figure()
         ax = fig.add_subplot(111)
-        ax.plot(wavelengths, real, label="Eps1 (Real)")
-        ax.plot(wavelengths, imag, label="Eps2 (Imag)")
+        if self.eps_select.currentText() == "Real":
+            ax.plot(wavelengths, real, label="Eps1 (Real)")
+        elif self.eps_select.currentText() == "Imaginary":
+            ax.plot(wavelengths, imag, label="Eps2 (Imag)")
+        else:  # Both
+            ax.plot(wavelengths, real, label="Eps1 (Real)")
+            ax.plot(wavelengths, imag, label="Eps2 (Imag)")
         ax.set_xlabel("Wavelength (nm)")
         ax.set_ylabel("Refractive Index")
         ax.legend()
