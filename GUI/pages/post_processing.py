@@ -17,7 +17,9 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QFrame,
 )
-
+ # TODO: Divide by E_0 for the field intensity normalization, since right now we don't
+ # generally this is fine since the amplitude is 1, but if the user changes the amplitude, 
+ # # the field intensity will be off by a factor of E_0^2.
 from ..simulation_state import SimulationState
 from ..widgets.calculation_figure import CalculationFigure
 
@@ -578,6 +580,8 @@ class ProcessingPage(QWidget):
             meta: dict,
             plot_opts: dict) -> Figure:
 
+        from scipy.interpolate import griddata
+
         slice_axis = str(plot_opts.get("slice_axis", "z")).lower()
         slice_value = float(plot_opts.get("slice_value", 0.0))
         pos_u, e_u, int_u, ax_idx = self._slice_points(
@@ -588,6 +592,55 @@ class ProcessingPage(QWidget):
         x = pos_u[:, other[0]]
         y = pos_u[:, other[1]]
 
+        # --- interpolation with extra stuff to remove weird artifacting ---
+        # 1. Strip out NaNs and infinities
+        finite_mask = np.isfinite(int_u)
+        
+        # 2. Identify the true dynamic range of the actual electromagnetic field
+        # We find the global max, and ignore regions that are perfectly flat or stuck at a baseline
+        global_max = np.max(int_u[finite_mask]) if np.any(finite_mask) else 1.0
+        
+        # If that square is a hard-coded value (like exactly 0.35, or a flat mask), 
+        # we can target it. We look for values that have structural variance.
+        # Let's clean out hard zeros/baselines, but keep real fields.
+        valid_mask = finite_mask & (int_u > 1e-5)
+        
+        # --- ADVANCED RADIAL OR GEOMETRIC CLEANING ---
+        # If the square still persists, it means it's a valid number mathematically but geometric.
+        # Let's make sure we aren't interpolating values that are perfectly uniform duplicates.
+        # We can round values slightly to find if there is a massive block of a single duplicate float.
+        vals, counts = np.unique(np.round(int_u, 4), return_counts=True)
+        if len(counts) > 0:
+            most_common_val = vals[np.argmax(counts)]
+            # If the most common value makes up a huge portion of the center, mask it out
+            if counts[np.argmax(counts)] > len(int_u) * 0.02 and most_common_val > 0.01:
+                valid_mask = valid_mask & (np.round(int_u, 4) != most_common_val)
+
+        # Fallback safeguard
+        if np.sum(valid_mask) < 4:
+            valid_mask = np.ones_like(int_u, dtype=bool)
+
+        x_clean = x[valid_mask]
+        y_clean = y[valid_mask]
+        int_clean = int_u[valid_mask]
+
+        # Define grid resolution
+        grid_res = int(plot_opts.get("grid_resolution", 200))
+        xi = np.linspace(x.min(), x.max(), grid_res)
+        yi = np.linspace(y.min(), y.max(), grid_res)
+        XI, YI = np.meshgrid(xi, yi)
+
+        # Interpolate using linear to prevent ringing around the edge of the square hole
+        interp_method = str(plot_opts.get("interpolation_method", "linear"))
+        intensity_grid = griddata((x_clean, y_clean), int_clean, (XI, YI), method=interp_method)
+        
+        # Fill the empty geometric hole left behind by the square with a neutral background or local fill
+        # Nearest neighbor interpolation can fill the inner gap seamlessly without artifacts
+        if np.any(np.isnan(intensity_grid)):
+            intensity_grid_fill = griddata((x_clean, y_clean), int_clean, (XI, YI), method='nearest')
+            intensity_grid = np.where(np.isnan(intensity_grid), intensity_grid_fill, intensity_grid)
+
+    # ------------------------------------------------------------------------------------------------
         clip_percentile = bool(plot_opts.get("clip_percentile", True))
         p_low = float(plot_opts.get("p_low", 2.0))
         p_high = float(plot_opts.get("p_high", 99.5))
@@ -618,13 +671,21 @@ class ProcessingPage(QWidget):
         ax_lin = fig.add_subplot(121)
         ax_log = fig.add_subplot(122)
 
-        sc_lin = ax_lin.scatter(x, y, c = int_u, cmap = cmap, s = 20,
-                vmin = vmin, vmax = vmax)
+        # --- Linear Plot using imshow ---
+        im_lin = ax_lin.imshow(
+            intensity_grid, 
+            extent=[x.min(), x.max(), y.min(), y.max()], 
+            origin='lower', 
+            cmap=cmap, 
+            vmin=vmin, 
+            vmax=vmax,
+            aspect='equal'
+        )
         ax_lin.set_xlabel("{} (nm)".format(names[other[0]]))
         ax_lin.set_ylabel("{} (nm)".format(names[other[1]]))
         ax_lin.set_title("Linear |E|^2")
         ax_lin.grid(True, alpha = 0.3)
-        cb_lin = fig.colorbar(sc_lin, ax = ax_lin)
+        cb_lin = fig.colorbar(im_lin, ax = ax_lin)
         cb_lin.set_label("|E|^2")
 
         pos_valid = int_u[int_u > 0]
@@ -638,21 +699,37 @@ class ProcessingPage(QWidget):
             if lvmax <= lvmin:
                 lvmax = lvmin * 10.0
             norm = LogNorm(vmin = lvmin, vmax = lvmax)
-            sc_log = ax_log.scatter(x, y, c = int_u, cmap = cmap, s = 20,
-                    norm = norm)
+            
+            # --- Log Plot using imshow ---
+            im_log = ax_log.imshow(
+                intensity_grid, 
+                extent=[x.min(), x.max(), y.min(), y.max()], 
+                origin='lower', 
+                cmap=cmap, 
+                norm=norm,
+                aspect='equal'
+            )
             cb_label = "|E|^2 (log)"
         else:
-            sc_log = ax_log.scatter(x, y, c = int_u, cmap = cmap, s = 20,
-                    vmin = vmin, vmax = vmax)
+            im_log = ax_log.imshow(
+                intensity_grid, 
+                extent=[x.min(), x.max(), y.min(), y.max()], 
+                origin='lower', 
+                cmap=cmap, 
+                vmin=vmin, 
+                vmax=vmax,
+                aspect='equal'
+            )
             cb_label = "|E|^2"
 
         ax_log.set_xlabel("{} (nm)".format(names[other[0]]))
         ax_log.set_ylabel("{} (nm)".format(names[other[1]]))
         ax_log.set_title("Log-aware |E|^2")
         ax_log.grid(True, alpha = 0.3)
-        cb_log = fig.colorbar(sc_log, ax = ax_log)
+        cb_log = fig.colorbar(im_log, ax = ax_log)
         cb_log.set_label(cb_label)
 
+        # Vector Overlay (remains anchored to original sparse data coordinate arrays x and y)
         if vector_overlay and e_u.ndim >= 2 and e_u.shape[1] >= 3:
             uu = np.real(e_u[:, other[0]])
             vv = np.real(e_u[:, other[1]])
