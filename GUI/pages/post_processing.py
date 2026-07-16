@@ -477,7 +477,10 @@ class ProcessingPage(QWidget):
             # percentiles of graph 
             pos = np.asarray(field_slice["pos"])
             e = np.asarray(field_slice["e"])
-            intensity = self._compute_intensity(e)
+            intensity = self._compute_intensity(
+                e,
+                intensity_override = field_slice.get("intensity", None),
+            )
             
             slice_axis = str(plot_opts.get("slice_axis", "z")).lower()
             slice_value = float(plot_opts.get("slice_value", 0.0))
@@ -636,7 +639,10 @@ class ProcessingPage(QWidget):
     def _build_field_figure(self, field_slice: dict, meta: dict, plot_opts: dict) -> Figure:
         pos = np.asarray(field_slice["pos"])
         e = np.asarray(field_slice["e"])
-        intensity = self._compute_intensity(e)
+        intensity = self._compute_intensity(
+            e,
+            intensity_override = field_slice.get("intensity", None),
+        )
 
         mode = str(plot_opts.get("view_mode", "auto")).lower()
 
@@ -782,7 +788,12 @@ class ProcessingPage(QWidget):
         log_vmin_ctrl.setEnabled(enabled)
         log_vmax_ctrl.setEnabled(enabled)
 
-    def _compute_intensity(self, e: np.ndarray) -> np.ndarray:
+    def _compute_intensity(self,
+            e: np.ndarray,
+            intensity_override: np.ndarray | None = None) -> np.ndarray:
+        if intensity_override is not None:
+            return np.asarray(intensity_override, dtype = float)
+
         e2 = np.sum(np.abs(e) ** 2, axis = -1)
         while e2.ndim > 1:
             e2 = np.mean(e2, axis = -1)
@@ -791,23 +802,23 @@ class ProcessingPage(QWidget):
     def _normalize_field_components(self,
             e_block: np.ndarray,
             pos_count: int,
-            requested_pol_idx: int) -> tuple[np.ndarray, int]:
+            requested_pol_idx: int) -> tuple[np.ndarray, int, np.ndarray | None]:
         arr = np.asarray(e_block)
         average_all_pol = requested_pol_idx < 0
 
         if arr.ndim == 2:
             if arr.shape == (pos_count, 3):
-                return arr, 0
+                return arr, 0, None
             if arr.shape == (3, pos_count):
-                return arr.T, 0
+                return arr.T, 0, None
             if arr.shape[-1] == 3:
-                return arr.reshape(-1, 3), 0
+                return arr.reshape(-1, 3), 0, None
             if arr.shape[0] == 3:
-                return arr.T.reshape(-1, 3), 0
-            return arr.reshape(pos_count, 3), 0
+                return arr.T.reshape(-1, 3), 0, None
+            return arr.reshape(pos_count, 3), 0, None
 
         if arr.ndim != 3:
-            return arr.reshape(pos_count, 3), 0
+            return arr.reshape(pos_count, 3), 0, None
 
         pos_axes = [ax for ax, size in enumerate(arr.shape) if size == pos_count]
         comp_axes = [ax for ax, size in enumerate(arr.shape) if size == 3]
@@ -820,7 +831,7 @@ class ProcessingPage(QWidget):
         pol_axis = next((ax for ax in range(arr.ndim) if ax not in (pos_axis, comp_axis)), None)
         if pol_axis is None:
             normalized = np.moveaxis(arr, (pos_axis, comp_axis), (0, 1)).reshape(pos_count, 3)
-            return normalized, 0
+            return normalized, 0, None
 
         normalized = np.moveaxis(arr, (pos_axis, comp_axis, pol_axis), (0, 1, 2))
 
@@ -831,10 +842,16 @@ class ProcessingPage(QWidget):
             normalized = normalized.reshape(pos_count, 3, -1)
 
         if average_all_pol:
-            return np.mean(normalized, axis = 2), -1
+            # Physical unpolarized average: <|E|^2> over polarization,
+            # not |<E>|^2 which can cancel by phase/symmetry.
+            intensity_per_pol = np.sum(np.abs(normalized) ** 2, axis = 1)
+            intensity_avg = np.mean(intensity_per_pol, axis = 1)
+            # Keep representative complex field for vector overlay.
+            e_rep = np.mean(normalized, axis = 2)
+            return e_rep, -1, np.asarray(intensity_avg, dtype = float)
 
         used_pol_idx = min(max(0, requested_pol_idx), normalized.shape[2] - 1)
-        return normalized[:, :, used_pol_idx], used_pol_idx
+        return normalized[:, :, used_pol_idx], used_pol_idx, None
 
     def _structured_slice_grid(self,
             x: np.ndarray,
@@ -1285,7 +1302,7 @@ class ProcessingPage(QWidget):
         else:
             e_wl = e
 
-        e_slice, used_pol_idx = self._normalize_field_components(
+        e_slice, used_pol_idx, intensity_override = self._normalize_field_components(
             e_wl,
             pos_count = pos.shape[0],
             requested_pol_idx = requested_pol_idx,
@@ -1295,6 +1312,8 @@ class ProcessingPage(QWidget):
             "e": e_slice,
             "pos": pos,
         }
+        if intensity_override is not None:
+            field_slice["intensity"] = intensity_override
 
         meta = {
             "wavelength_nm": float(wl[wl_idx]) if wl.size > wl_idx else 0.0,
