@@ -1057,7 +1057,7 @@ class ProcessingPage(QWidget):
                     (x_clean, y_clean),
                     int_clean,
                     (XI, YI),
-                    method = 'linear',
+                    method = 'cubic',
                 )
                 if np.any(np.isnan(interp_grid)):
                     fill_grid = griddata(
