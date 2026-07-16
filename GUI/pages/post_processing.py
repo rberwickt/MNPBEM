@@ -788,6 +788,96 @@ class ProcessingPage(QWidget):
             e2 = np.mean(e2, axis = -1)
         return np.asarray(e2, dtype = float)
 
+    def _normalize_field_components(self,
+            e_block: np.ndarray,
+            pos_count: int,
+            requested_pol_idx: int) -> tuple[np.ndarray, int]:
+        arr = np.asarray(e_block)
+        average_all_pol = requested_pol_idx < 0
+
+        if arr.ndim == 2:
+            if arr.shape == (pos_count, 3):
+                return arr, 0
+            if arr.shape == (3, pos_count):
+                return arr.T, 0
+            if arr.shape[-1] == 3:
+                return arr.reshape(-1, 3), 0
+            if arr.shape[0] == 3:
+                return arr.T.reshape(-1, 3), 0
+            return arr.reshape(pos_count, 3), 0
+
+        if arr.ndim != 3:
+            return arr.reshape(pos_count, 3), 0
+
+        pos_axes = [ax for ax, size in enumerate(arr.shape) if size == pos_count]
+        comp_axes = [ax for ax, size in enumerate(arr.shape) if size == 3]
+
+        pos_axis = pos_axes[0] if pos_axes else 0
+        comp_axis = next((ax for ax in comp_axes if ax != pos_axis), None)
+        if comp_axis is None:
+            comp_axis = 1 if arr.shape[1] == 3 else arr.ndim - 1
+
+        pol_axis = next((ax for ax in range(arr.ndim) if ax not in (pos_axis, comp_axis)), None)
+        if pol_axis is None:
+            normalized = np.moveaxis(arr, (pos_axis, comp_axis), (0, 1)).reshape(pos_count, 3)
+            return normalized, 0
+
+        normalized = np.moveaxis(arr, (pos_axis, comp_axis, pol_axis), (0, 1, 2))
+
+        if normalized.shape[1] != 3 and normalized.shape[2] == 3:
+            normalized = np.moveaxis(normalized, 2, 1)
+
+        if normalized.shape[0] != pos_count or normalized.shape[1] != 3:
+            normalized = normalized.reshape(pos_count, 3, -1)
+
+        if average_all_pol:
+            return np.mean(normalized, axis = 2), -1
+
+        used_pol_idx = min(max(0, requested_pol_idx), normalized.shape[2] - 1)
+        return normalized[:, :, used_pol_idx], used_pol_idx
+
+    def _structured_slice_grid(self,
+            x: np.ndarray,
+            y: np.ndarray,
+            values: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+        x = np.asarray(x, dtype = float)
+        y = np.asarray(y, dtype = float)
+        values = np.asarray(values, dtype = float)
+
+        if x.size == 0 or y.size == 0 or values.size == 0:
+            return None
+
+        x_key = np.round(x, decimals = 9)
+        y_key = np.round(y, decimals = 9)
+        x_unique, x_inv = np.unique(x_key, return_inverse = True)
+        y_unique, y_inv = np.unique(y_key, return_inverse = True)
+
+        if x_unique.size * y_unique.size != values.size:
+            return None
+
+        grid = np.full((y_unique.size, x_unique.size), np.nan, dtype = float)
+        counts = np.zeros_like(grid, dtype = int)
+
+        for idx, val in enumerate(values):
+            yi = y_inv[idx]
+            xi = x_inv[idx]
+            if np.isnan(grid[yi, xi]):
+                grid[yi, xi] = val
+            else:
+                grid[yi, xi] += val
+            counts[yi, xi] += 1
+
+        if np.any(counts == 0):
+            return None
+
+        multi_mask = counts > 1
+        if np.any(multi_mask):
+            grid[multi_mask] /= counts[multi_mask]
+
+        x_coords = np.array([np.mean(x[x_inv == i]) for i in range(x_unique.size)], dtype = float)
+        y_coords = np.array([np.mean(y[y_inv == i]) for i in range(y_unique.size)], dtype = float)
+        return x_coords, y_coords, grid
+
     def _slice_points(self,
             pos: np.ndarray,
             e: np.ndarray,
@@ -861,7 +951,6 @@ class ProcessingPage(QWidget):
             intensity: np.ndarray,
             meta: dict,
             plot_opts: dict) -> Figure:
-
         from scipy.interpolate import griddata
 
         slice_axis = str(plot_opts.get("slice_axis", "z")).lower()
@@ -887,44 +976,6 @@ class ProcessingPage(QWidget):
         y_clean = y[valid_mask]
         int_clean = int_u[valid_mask]
 
-        # --- Adaptive grid resolution based on data size ---
-        # Fewer points = lower resolution (faster), more points = higher resolution
-        n_points = len(x_clean)
-        if n_points < 100:
-            grid_res = 80
-        elif n_points < 500:
-            grid_res = 120
-        elif n_points < 2000:
-            grid_res = 150
-        elif n_points < 10000:
-            grid_res = 180
-        else:
-            # For very large datasets, cap resolution to avoid memory explosion
-            grid_res = 200
-
-        xi = np.linspace(x.min(), x.max(), grid_res)
-        yi = np.linspace(y.min(), y.max(), grid_res)
-        XI, YI = np.meshgrid(xi, yi)
-
-        # Use fastest available interpolation method for large datasets
-        interp_method = str(plot_opts.get("interpolation_method", "linear"))
-        if n_points > 5000 and interp_method != "nearest":
-            interp_method = "linear"  # Avoid cubic/thin_plate_spline for very large datasets
-        
-        try:
-            intensity_grid = griddata((x_clean, y_clean), int_clean, (XI, YI), method=interp_method)
-        except Exception:
-            # Fallback to nearest neighbor if griddata fails
-            intensity_grid = griddata((x_clean, y_clean), int_clean, (XI, YI), method='nearest')
-        
-        # Fill NaN holes with nearest neighbor
-        if np.any(np.isnan(intensity_grid)):
-            try:
-                intensity_grid_fill = griddata((x_clean, y_clean), int_clean, (XI, YI), method='nearest')
-                intensity_grid = np.where(np.isnan(intensity_grid), intensity_grid_fill, intensity_grid)
-            except Exception:
-                pass  # If fill fails, leave NaNs as-is
-
     # ------------------------------------------------------------------------------------------------
         clip_percentile = bool(plot_opts.get("clip_percentile", True))
         p_low = float(plot_opts.get("p_low", 2.0))
@@ -937,7 +988,7 @@ class ProcessingPage(QWidget):
         vector_overlay = bool(plot_opts.get("vector_overlay", False))
         vec_density = int(plot_opts.get("vector_density", 4))
 
-        valid = int_u[np.isfinite(int_u)]
+        valid = int_clean[np.isfinite(int_clean)]
         if valid.size == 0:
             valid = np.asarray([0.0], dtype = float)
 
@@ -956,24 +1007,99 @@ class ProcessingPage(QWidget):
         ax_lin = fig.add_subplot(121)
         ax_log = fig.add_subplot(122)
 
-        # --- Linear Plot using imshow ---
-        im_lin = ax_lin.imshow(
-            intensity_grid, 
-            extent=[x.min(), x.max(), y.min(), y.max()], 
-            origin='lower', 
-            cmap=cmap, 
-            vmin=vmin, 
-            vmax=vmax,
-            aspect='equal'
-        )
+        mesh = self._structured_slice_grid(x_clean, y_clean, int_clean)
+        image_grid = None
+        use_scatter_fallback = x_clean.size < 3
+
+        if mesh is not None:
+            x_grid, y_grid, intensity_grid = mesh
+            image_grid = {
+                "grid": intensity_grid,
+                "extent": [x_grid.min(), x_grid.max(), y_grid.min(), y_grid.max()],
+            }
+        elif not use_scatter_fallback:
+            x_span = float(np.ptp(x_clean))
+            y_span = float(np.ptp(y_clean))
+            nx_unique = max(2, np.unique(np.round(x_clean, 9)).size)
+            ny_unique = max(2, np.unique(np.round(y_clean, 9)).size)
+
+            grid_res_x = min(320, max(120, nx_unique * 4))
+            grid_res_y = min(320, max(120, ny_unique * 4))
+
+            if x_span <= 0.0:
+                grid_res_x = 2
+            if y_span <= 0.0:
+                grid_res_y = 2
+
+            xi = np.linspace(float(np.min(x_clean)), float(np.max(x_clean)), grid_res_x)
+            yi = np.linspace(float(np.min(y_clean)), float(np.max(y_clean)), grid_res_y)
+            XI, YI = np.meshgrid(xi, yi)
+
+            try:
+                interp_grid = griddata(
+                    (x_clean, y_clean),
+                    int_clean,
+                    (XI, YI),
+                    method = 'linear',
+                )
+                if np.any(np.isnan(interp_grid)):
+                    fill_grid = griddata(
+                        (x_clean, y_clean),
+                        int_clean,
+                        (XI, YI),
+                        method = 'nearest',
+                    )
+                    interp_grid = np.where(np.isnan(interp_grid), fill_grid, interp_grid)
+
+                if np.any(np.isfinite(interp_grid)):
+                    image_grid = {
+                        "grid": interp_grid,
+                        "extent": [xi.min(), xi.max(), yi.min(), yi.max()],
+                    }
+                else:
+                    use_scatter_fallback = True
+            except Exception:
+                use_scatter_fallback = True
+
+        def _draw_intensity(ax, *, use_log_norm: bool):
+            if use_scatter_fallback or image_grid is None:
+                scatter_kwargs = {
+                    "c": int_clean,
+                    "cmap": cmap,
+                    "s": 16,
+                    "edgecolors": "none",
+                }
+                if use_log_norm:
+                    scatter_kwargs["norm"] = norm
+                else:
+                    scatter_kwargs["vmin"] = vmin
+                    scatter_kwargs["vmax"] = vmax
+                return ax.scatter(x_clean, y_clean, **scatter_kwargs)
+
+            image_kwargs = {
+                "cmap": cmap,
+                "origin": "lower",
+                "extent": image_grid["extent"],
+                "aspect": "equal",
+                "interpolation": "bilinear",
+            }
+            if use_log_norm:
+                image_kwargs["norm"] = norm
+            else:
+                image_kwargs["vmin"] = vmin
+                image_kwargs["vmax"] = vmax
+            return ax.imshow(image_grid["grid"], **image_kwargs)
+
+        im_lin = _draw_intensity(ax_lin, use_log_norm = False)
         ax_lin.set_xlabel("{} (nm)".format(names[other[0]]))
         ax_lin.set_ylabel("{} (nm)".format(names[other[1]]))
         ax_lin.set_title("Linear |E|^2")
         ax_lin.grid(True, alpha = 0.3)
+        ax_lin.set_aspect('equal')
         cb_lin = fig.colorbar(im_lin, ax = ax_lin)
         cb_lin.set_label("|E|^2")
 
-        pos_valid = int_u[int_u > 0]
+        pos_valid = int_clean[int_clean > 0]
         if log_scale and pos_valid.size > 0:
             use_manual_log_bounds = bool(plot_opts.get("manual_log_bounds", False))
             if use_manual_log_bounds:
@@ -989,33 +1115,18 @@ class ProcessingPage(QWidget):
             if lvmax <= lvmin:
                 lvmax = lvmin * 10.0
             norm = LogNorm(vmin = lvmin, vmax = lvmax)
-            
-            # --- Log Plot using imshow ---
-            im_log = ax_log.imshow(
-                intensity_grid, 
-                extent=[x.min(), x.max(), y.min(), y.max()], 
-                origin='lower', 
-                cmap=cmap, 
-                norm=norm,
-                aspect='equal'
-            )
+
+            im_log = _draw_intensity(ax_log, use_log_norm = True)
             cb_label = "|E|^2 (log)"
         else:
-            im_log = ax_log.imshow(
-                intensity_grid, 
-                extent=[x.min(), x.max(), y.min(), y.max()], 
-                origin='lower', 
-                cmap=cmap, 
-                vmin=vmin, 
-                vmax=vmax,
-                aspect='equal'
-            )
+            im_log = _draw_intensity(ax_log, use_log_norm = False)
             cb_label = "|E|^2"
 
         ax_log.set_xlabel("{} (nm)".format(names[other[0]]))
         ax_log.set_ylabel("{} (nm)".format(names[other[1]]))
         ax_log.set_title("Log-aware |E|^2")
         ax_log.grid(True, alpha = 0.3)
+        ax_log.set_aspect('equal')
         cb_log = fig.colorbar(im_log, ax = ax_log)
         cb_log.set_label(cb_label)
 
@@ -1174,43 +1285,11 @@ class ProcessingPage(QWidget):
         else:
             e_wl = e
 
-        if e_wl.ndim == 2:
-            e_slice = e_wl
-            used_pol_idx = 0
-        elif e_wl.ndim == 3:
-            # Expected layouts after wavelength selection:
-            # (n_pos, 3, n_pol) or (n_pos, n_pol, 3)
-            if e_wl.shape[1] == 3 and e_wl.shape[2] != 3:
-                if average_all_pol:
-                    e_slice = np.mean(e_wl, axis = 2)
-                    used_pol_idx = -1
-                else:
-                    used_pol_idx = min(max(0, requested_pol_idx), e_wl.shape[2] - 1)
-                    e_slice = e_wl[:, :, used_pol_idx]
-            elif e_wl.shape[2] == 3 and e_wl.shape[1] != 3:
-                if average_all_pol:
-                    e_slice = np.mean(e_wl, axis = 1)
-                    used_pol_idx = -1
-                else:
-                    used_pol_idx = min(max(0, requested_pol_idx), e_wl.shape[1] - 1)
-                    e_slice = e_wl[:, used_pol_idx, :]
-            elif e_wl.shape[1] == 3 and e_wl.shape[2] == 3:
-                # Ambiguous (n_pos, 3, 3): default to component axis=1, polarization axis=2.
-                if average_all_pol:
-                    e_slice = np.mean(e_wl, axis = 2)
-                    used_pol_idx = -1
-                else:
-                    used_pol_idx = min(max(0, requested_pol_idx), e_wl.shape[2] - 1)
-                    e_slice = e_wl[:, :, used_pol_idx]
-            else:
-                e_slice = e_wl.reshape(-1, 3)
-                used_pol_idx = 0
-        else:
-            e_slice = e_wl.reshape(-1, 3)
-            used_pol_idx = 0
-
-        if e_slice.shape[1] != 3:
-            e_slice = e_slice.reshape(pos.shape[0], 3)
+        e_slice, used_pol_idx = self._normalize_field_components(
+            e_wl,
+            pos_count = pos.shape[0],
+            requested_pol_idx = requested_pol_idx,
+        )
 
         field_slice = {
             "e": e_slice,
