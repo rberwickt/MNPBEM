@@ -47,12 +47,18 @@ class MainController(QMainWindow):
         if self.page2 is not None and self.page3 is not None:
             return
 
-        # Import lazily so StartPage can run setup_env before backend imports.
+        from .widgets.import_loading import ImportProgressDialog
+        import_dialog = ImportProgressDialog(self)
+        import_dialog.exec() # will block until import is done, (which means these pages should load fine)
+
+        # in case something failed, import again (python should skip it if it is already imported so no performance hit)
         from .pages.simulation import SimulationPage
         from .pages.post_processing import ProcessingPage
 
         self.page2 = SimulationPage(self.state)
         self.page3 = ProcessingPage(self.state)
+
+        
 
         self.stacked_widget.addWidget(self.page2)
         self.stacked_widget.addWidget(self.page3)
@@ -63,7 +69,7 @@ class MainController(QMainWindow):
         self.page2.setup_ui_from_state()  # not really using this, but could be useful later (so leaving it in)
         self.stacked_widget.setCurrentWidget(self.page2)
     def go_to_post(self):
-        self._ensure_runtime_pages()
+        #self._ensure_runtime_pages() # already done in go to sim so redundant
         self.page3.setup_ui_from_state()
         self.stacked_widget.setCurrentWidget(self.page3)
     def toolbar_view_state(self): # freezes up the main window (close when done)

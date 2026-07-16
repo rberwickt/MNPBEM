@@ -236,6 +236,50 @@ class SimulationState:
                         "Plane-wave polarization {} must be orthogonal to its propagation direction"
                         .format(idx)
                     )
+
+        if self.excitation_source == "Dipole":
+            dipole_moment = [
+                float(self.dipole_moment_x),
+                float(self.dipole_moment_y),
+                float(self.dipole_moment_z)]
+
+            if dipole_moment == [0.0, 0.0, 0.0]:
+                return False, "Dipole moment cannot be the zero vector"
+
+            # GUI dipole path targets embedding medium (medium index 1).
+            # Prevent the common crash case where the source point is placed
+            # inside the particle, yielding an empty ComPoint group.
+            px = float(self.dipole_pos_x)
+            py = float(self.dipole_pos_y)
+            pz = float(self.dipole_pos_z)
+            s_type = str(self.structure).lower()
+
+            if "sphere" in s_type:
+                radius = 0.5 * float(self.diameter)
+                if (px * px + py * py + pz * pz) < (radius * radius):
+                    return False, (
+                        "Dipole position is inside the sphere. Move it outside "
+                        "the particle surface for GUI dipole runs."
+                    )
+            elif "cube" in s_type:
+                half = 0.5 * float(self.size)
+                if (abs(px) < half) and (abs(py) < half) and (abs(pz) < half):
+                    return False, (
+                        "Dipole position is inside the cube. Move it outside "
+                        "the particle surface for GUI dipole runs."
+                    )
+            elif "rod" in s_type:
+                radius = 0.5 * float(self.diameter)
+                half_h = 0.5 * float(self.height)
+                if bool(self.horizontal):
+                    inside_core = ((py * py + pz * pz) < (radius * radius)) and (abs(px) < half_h)
+                else:
+                    inside_core = ((px * px + py * py) < (radius * radius)) and (abs(pz) < half_h)
+                if inside_core:
+                    return False, (
+                        "Dipole position is inside the rod. Move it outside "
+                        "the particle surface for GUI dipole runs."
+                    )
         
         return True, ""
 
@@ -319,7 +363,7 @@ class SimulationState:
             "enei_max": float(nm_max),
             "n_wavelengths": int(self.energy_steps),
             "calculate_cross_sections": True,
-            "calculate_fields": True,
+            "calculate_fields": self.excitation_source == "Plane Wave",  # only calculate fields for plane wave excitation (only one supported out of the three)
             "interp": self.interp,
             "relcutoff": int(self.rel_cutoff),
             "grid": {
@@ -347,8 +391,25 @@ class SimulationState:
             sim_config["beam_width"] = float(self.beam_width)
         elif self.excitation_source == "Dipole":
             sim_config["excitation"] = "dipole"
-            sim_config["dipole_position"] = [self.dipole_pos_x, self.dipole_pos_y, self.dipole_pos_z]
-            sim_config["dipole_moment"] = [self.dipole_moment_x, self.dipole_moment_y, self.dipole_moment_z]
+            dipole_position = [
+                float(self.dipole_pos_x),
+                float(self.dipole_pos_y),
+                float(self.dipole_pos_z)]
+            dipole_moment = [
+                float(self.dipole_moment_x),
+                float(self.dipole_moment_y),
+                float(self.dipole_moment_z)]
+
+            # Keep both formats for compatibility across simulation runners:
+            # - dipole_ret/dipole_stat read simulation.dipole.{position,orientation,medium}
+            # - *_layer/*_mirror dipole runners read flat dipole_position/moment keys.
+            sim_config["dipole"] = {
+                "position": dipole_position,
+                "orientation": dipole_moment,
+                "medium": 1
+            }
+            sim_config["dipole_position"] = dipole_position
+            sim_config["dipole_moment"] = dipole_moment
         else:
             # default to planewave
             sim_config["excitation"] = "planewave"
