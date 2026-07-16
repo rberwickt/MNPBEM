@@ -158,7 +158,7 @@ class ProcessingPage(QWidget):
         grid.setVerticalSpacing(4)
 
         view_mode = QComboBox()
-        view_mode.addItems(["Auto", "2D", "3D"])
+        view_mode.addItems(["Auto", "2D", "3D", "Scatter"])
 
         slice_axis = QComboBox()
         slice_axis.addItems(["x", "y", "z"])
@@ -175,7 +175,9 @@ class ProcessingPage(QWidget):
         wavelength_idx.setValue(0)
 
         pol_idx = QSpinBox()
-        pol_idx.setRange(0, 1000000)
+        pol_idx.setRange(-1, 1000000)
+        pol_idx.setSpecialValueText("Avg (All)")
+        pol_idx.setToolTip("Set to -1 to average all polarizations (unpolarized view).")
         pol_idx.setValue(0)
 
         log_scale = QCheckBox("Enable log color scale")
@@ -426,6 +428,41 @@ class ProcessingPage(QWidget):
 
         try:
             plot_opts = self._get_field_plot_options()
+            
+            # Get grid bounds info for diagnostics
+            pos = np.asarray(raw.get("pos", []))
+            if pos.size > 0:
+                x_min, x_max = float(np.min(pos[:, 0])), float(np.max(pos[:, 0]))
+                y_min, y_max = float(np.min(pos[:, 1])), float(np.max(pos[:, 1]))
+                z_min, z_max = float(np.min(pos[:, 2])), float(np.max(pos[:, 2]))
+                
+                slice_axis = str(plot_opts.get("slice_axis", "z")).lower()
+                slice_value = float(plot_opts.get("slice_value", 0.0))
+                
+                # Check if slice value is at center of grid
+                axis_map = {"x": 0, "y": 1, "z": 2}
+                ax_idx = axis_map.get(slice_axis, 2)
+                axis_bounds = [(x_min, x_max), (y_min, y_max), (z_min, z_max)]
+                axis_min, axis_max = axis_bounds[ax_idx]
+                axis_center = (axis_min + axis_max) / 2.0
+                
+                # If slice is far from center, warn user
+                if abs(slice_value - axis_center) > 0.1 * (axis_max - axis_min):
+                    info_msg = (
+                        "Field Grid Info:\n"
+                        "  X: [{:.2f}, {:.2f}] nm (center: {:.2f})\n"
+                        "  Y: [{:.2f}, {:.2f}] nm (center: {:.2f})\n"
+                        "  Z: [{:.2f}, {:.2f}] nm (center: {:.2f})\n\n"
+                        "Current slice ({} = {:.2f} nm) is far from axis center ({:.2f} nm).\n"
+                        "Consider setting slice to axis center for best results."
+                    ).format(
+                        x_min, x_max, (x_min + x_max) / 2.0,
+                        y_min, y_max, (y_min + y_max) / 2.0,
+                        z_min, z_max, (z_min + z_max) / 2.0,
+                        slice_axis, slice_value, axis_center
+                    )
+                    QMessageBox.information(self, "Slice Position Info", info_msg)
+            
             field_slice, meta = self._extract_field_slice(
                 raw,
                 wl_idx = int(plot_opts["wavelength_idx"]),
@@ -488,18 +525,49 @@ class ProcessingPage(QWidget):
         n_pol = ext.shape[1]
         show_all = (pol_idx < 0) or (pol_idx >= n_pol)
 
-        if show_all:
+        # When showing all polarizations with many pols, only show averages to avoid legend explosion
+        max_individual_pols_to_plot = 3
+        show_individual = show_all and (n_pol <= max_individual_pols_to_plot)
+
+        if show_individual:
+            # Show individual polarizations for small n_pol
             for i in range(n_pol):
                 ax.plot(wl, ext[:, i], label = "ext pol {}".format(i))
                 ax.plot(wl, sca[:, i], linestyle = "--", label = "sca pol {}".format(i))
                 ax.plot(wl, abs_[:, i], linestyle = ":", label = "abs pol {}".format(i))
+        elif show_all and n_pol > max_individual_pols_to_plot:
+            # For many polarizations, show only averages with a note
+            ax.plot(
+                wl,
+                np.mean(ext, axis = 1),
+                color = "black",
+                linewidth = 2.2,
+                label = "ext avg ({} pols)".format(n_pol),
+            )
+            ax.plot(
+                wl,
+                np.mean(sca, axis = 1),
+                color = "black",
+                linestyle = "--",
+                linewidth = 2.0,
+                label = "sca avg ({} pols)".format(n_pol),
+            )
+            ax.plot(
+                wl,
+                np.mean(abs_, axis = 1),
+                color = "black",
+                linestyle = ":",
+                linewidth = 2.0,
+                label = "abs avg ({} pols)".format(n_pol),
+            )
         else:
+            # Show single polarization
             i = int(pol_idx)
             ax.plot(wl, ext[:, i], label = "ext pol {}".format(i))
             ax.plot(wl, sca[:, i], linestyle = "--", label = "sca pol {}".format(i))
             ax.plot(wl, abs_[:, i], linestyle = ":", label = "abs pol {}".format(i))
 
-        if show_all and n_pol > 1:
+        if show_all and n_pol > 1 and show_individual:
             ax.plot(
                 wl,
                 np.mean(ext, axis = 1),
@@ -527,11 +595,11 @@ class ProcessingPage(QWidget):
         ax.set_xlabel("Wavelength (nm)")
         ax.set_ylabel("Cross Section")
         if show_all:
-            ax.set_title("Spectrum Overview")
+            ax.set_title("Spectrum Overview ({} polarizations)".format(n_pol) if not show_individual else "Spectrum Overview")
         else:
             ax.set_title("Spectrum Overview (Polarization {})".format(int(pol_idx)))
         ax.grid(True, alpha = 0.3)
-        ax.legend(fontsize = 8)
+        ax.legend(fontsize = 8, loc = 'best')
         fig.tight_layout()
         return fig
 
@@ -575,6 +643,9 @@ class ProcessingPage(QWidget):
         if mode == "3d":
             return self._build_field_figure_3d(pos, intensity, meta, plot_opts)
 
+        if mode == "scatter":
+            return self._build_field_figure_scatter(pos, e, intensity, meta, plot_opts)
+
         if mode == "2d":
             return self._build_field_figure_2d(pos, e, intensity, meta, plot_opts)
 
@@ -582,6 +653,127 @@ class ProcessingPage(QWidget):
             return self._build_field_figure_3d(pos, intensity, meta, plot_opts)
 
         return self._build_field_figure_2d(pos, e, intensity, meta, plot_opts)
+
+    def _build_field_figure_scatter(self,
+            pos: np.ndarray,
+            e: np.ndarray,
+            intensity: np.ndarray,
+            meta: dict,
+            plot_opts: dict) -> Figure:
+        """
+        Raw scatter plot of field data (no interpolation).
+        Useful for diagnosing raw data issues vs interpolation problems.
+        """
+        slice_axis = str(plot_opts.get("slice_axis", "z")).lower()
+        slice_value = float(plot_opts.get("slice_value", 0.0))
+        pos_u, e_u, int_u, ax_idx = self._slice_points(
+            pos, e, intensity, axis = slice_axis, value = slice_value)
+
+        other = [i for i in range(3) if i != ax_idx]
+        names = ["x", "y", "z"]
+        x = pos_u[:, other[0]]
+        y = pos_u[:, other[1]]
+
+        # Use all valid data (no masking)
+        finite_mask = np.isfinite(int_u)
+        if np.sum(finite_mask) < 1:
+            finite_mask = np.ones_like(int_u, dtype = bool)
+
+        x_plot = x[finite_mask]
+        y_plot = y[finite_mask]
+        int_plot = int_u[finite_mask]
+
+        # Determine color scale
+        cmap = str(plot_opts.get("cmap", "inferno"))
+        clip_percentile = bool(plot_opts.get("clip_percentile", True))
+        p_low = float(plot_opts.get("p_low", 2.0))
+        p_high = float(plot_opts.get("p_high", 99.5))
+
+        valid = int_plot[np.isfinite(int_plot)]
+        if valid.size == 0:
+            valid = np.asarray([0.0], dtype = float)
+
+        if clip_percentile:
+            vmin = float(np.percentile(valid, p_low))
+            vmax = float(np.percentile(valid, p_high))
+        else:
+            vmin = float(np.min(valid))
+            vmax = float(np.max(valid))
+
+        if vmax <= vmin:
+            vmax = vmin + 1e-12
+
+        fig = Figure(figsize = (12, 6))
+        ax_lin = fig.add_subplot(121)
+        ax_log = fig.add_subplot(122)
+
+        # Linear scatter
+        sc_lin = ax_lin.scatter(
+            x_plot, y_plot, c = int_plot,
+            cmap = cmap, s = 20, vmin = vmin, vmax = vmax,
+            alpha = 0.7, edgecolors = 'none'
+        )
+        ax_lin.set_xlabel("{} (nm)".format(names[other[0]]))
+        ax_lin.set_ylabel("{} (nm)".format(names[other[1]]))
+        ax_lin.set_title("Linear |E|^2 (Raw Points)")
+        ax_lin.grid(True, alpha = 0.3)
+        ax_lin.set_aspect('equal')
+        cb_lin = fig.colorbar(sc_lin, ax = ax_lin)
+        cb_lin.set_label("|E|^2")
+
+        # Log scatter
+        pos_valid = int_plot[int_plot > 0]
+        if pos_valid.size > 0:
+            use_manual_log_bounds = bool(plot_opts.get("manual_log_bounds", False))
+            if use_manual_log_bounds:
+                lvmin = max(float(plot_opts.get("log_vmin", 1e-12)), 1e-12)
+                lvmax = float(plot_opts.get("log_vmax", lvmin * 10.0))
+            else:
+                if clip_percentile:
+                    lvmin = max(float(np.percentile(pos_valid, p_low)), 1e-12)
+                    lvmax = float(np.percentile(pos_valid, p_high))
+                else:
+                    lvmin = max(float(np.min(pos_valid)), 1e-12)
+                    lvmax = float(np.max(pos_valid))
+            if lvmax <= lvmin:
+                lvmax = lvmin * 10.0
+
+            # Mask very small values for log plot
+            log_mask = int_plot > 1e-15
+            sc_log = ax_log.scatter(
+                x_plot[log_mask], y_plot[log_mask], c = int_plot[log_mask],
+                cmap = cmap, s = 20, norm = LogNorm(vmin = lvmin, vmax = lvmax),
+                alpha = 0.7, edgecolors = 'none'
+            )
+            cb_label = "|E|^2 (log)"
+        else:
+            sc_log = ax_log.scatter(
+                x_plot, y_plot, c = int_plot,
+                cmap = cmap, s = 20, vmin = vmin, vmax = vmax,
+                alpha = 0.7, edgecolors = 'none'
+            )
+            cb_label = "|E|^2"
+
+        ax_log.set_xlabel("{} (nm)".format(names[other[0]]))
+        ax_log.set_ylabel("{} (nm)".format(names[other[1]]))
+        ax_log.set_title("Log-aware |E|^2 (Raw Points)")
+        ax_log.grid(True, alpha = 0.3)
+        ax_log.set_aspect('equal')
+        cb_log = fig.colorbar(sc_log, ax = ax_log)
+        cb_log.set_label(cb_label)
+
+        pol_label = self._format_pol_label(meta)
+        fig.suptitle(
+            "Raw Field Scatter (no interpolation) - wl={:.2f} nm, pol={}, {} points".format(
+                float(meta.get("wavelength_nm", 0.0)),
+                pol_label,
+                len(x_plot)
+            ),
+            fontsize = 11,
+        )
+
+        fig.tight_layout()
+        return fig
 
     def _set_log_bounds_controls_enabled(self,
             enabled: bool,
@@ -602,6 +794,10 @@ class ProcessingPage(QWidget):
             intensity: np.ndarray,
             axis: str,
             value: float):
+        """
+        Extract a 2D slice of field data along a specified axis.
+        Uses a fixed tolerance approach (more robust than dynamic calculations).
+        """
         axis_map = {"x": 0, "y": 1, "z": 2}
         ax_idx = axis_map.get(axis, 2)
 
@@ -609,18 +805,43 @@ class ProcessingPage(QWidget):
         if coords.size == 0:
             return pos, e, intensity, ax_idx
 
-        if np.allclose(coords, value):
-            mask = np.ones(coords.shape[0], dtype = bool)
+        coord_min = float(np.min(coords))
+        coord_max = float(np.max(coords))
+        coord_range = coord_max - coord_min
+
+        # If the slice value is outside the grid bounds, use the center instead
+        if value < coord_min or value > coord_max:
+            value = coord_min + 0.5 * coord_range
+
+        # Use fixed tolerance approach (from Gemini/BEM best practices)
+        # This is more robust than dynamic grid spacing calculations
+        diffs = np.abs(coords - value)
+        
+        # Start with a conservative tolerance (1e-3 nm is reasonable for most grids)
+        base_tol = 1e-3
+        
+        # If grid spacing appears very small, adapt slightly
+        n_unique = len(np.unique(np.round(coords, 9)))
+        if n_unique > 1:
+            grid_spacing = coord_range / (n_unique - 1)
+            # Use max of base_tol and 1/10 of grid spacing
+            tol = max(base_tol, 0.1 * grid_spacing)
         else:
-            diffs = np.abs(coords - value)
-            nearest = float(np.min(diffs))
-            denom = max(1, np.unique(np.round(coords, 9)).size)
-            tol = max(1e-9, 0.5 * float(coords.max() - coords.min()) / denom)
-            mask = diffs <= max(tol, nearest + 1e-12)
-
+            tol = base_tol
+        
+        mask = diffs <= tol
+        
+        # If we get too few points, gradually increase tolerance
+        for tol_scale in [1.0, 2.0, 5.0, 10.0, 100.0]:
+            if np.sum(mask) >= 4:
+                break
+            mask = diffs <= tol_scale * tol
+        
+        # Final fallback: get the nearest plane
         if np.sum(mask) == 0:
-            mask[np.argmin(np.abs(coords - value))] = True
-
+            nearest_idx = np.argmin(diffs)
+            mask = coords == coords[nearest_idx]
+        
         return pos[mask], e[mask], intensity[mask], ax_idx
 
     def _is_grid_3d(self, pos: np.ndarray, tol: float = 1e-9) -> bool:
@@ -653,52 +874,56 @@ class ProcessingPage(QWidget):
         x = pos_u[:, other[0]]
         y = pos_u[:, other[1]]
 
-        # --- interpolation with extra stuff to remove weird artifacting ---
-        # 1. Strip out NaNs and infinities
+        # --- Data cleaning: only remove NaN/inf, keep all valid data ---
         finite_mask = np.isfinite(int_u)
         
-        # 2. Identify the true dynamic range of the actual electromagnetic field
-        # We find the global max, and ignore regions that are perfectly flat or stuck at a baseline
-        global_max = np.max(int_u[finite_mask]) if np.any(finite_mask) else 1.0
-        
-        # If that square is a hard-coded value (like exactly 0.35, or a flat mask), 
-        # we can target it. We look for values that have structural variance.
-        # Let's clean out hard zeros/baselines, but keep real fields.
-        valid_mask = finite_mask & (int_u > 1e-5)
-        
-        # --- ADVANCED RADIAL OR GEOMETRIC CLEANING ---
-        # If the square still persists, it means it's a valid number mathematically but geometric.
-        # Let's make sure we aren't interpolating values that are perfectly uniform duplicates.
-        # We can round values slightly to find if there is a massive block of a single duplicate float.
-        vals, counts = np.unique(np.round(int_u, 4), return_counts=True)
-        if len(counts) > 0:
-            most_common_val = vals[np.argmax(counts)]
-            # If the most common value makes up a huge portion of the center, mask it out
-            if counts[np.argmax(counts)] > len(int_u) * 0.02 and most_common_val > 0.01:
-                valid_mask = valid_mask & (np.round(int_u, 4) != most_common_val)
-
-        # Fallback safeguard
-        if np.sum(valid_mask) < 4:
-            valid_mask = np.ones_like(int_u, dtype=bool)
+        # If all data is NaN, use unfiltered (to avoid empty grid)
+        if np.sum(finite_mask) < 4:
+            valid_mask = np.ones_like(int_u, dtype = bool)
+        else:
+            valid_mask = finite_mask
 
         x_clean = x[valid_mask]
         y_clean = y[valid_mask]
         int_clean = int_u[valid_mask]
 
-        # Define grid resolution
-        grid_res = int(plot_opts.get("grid_resolution", 200))
+        # --- Adaptive grid resolution based on data size ---
+        # Fewer points = lower resolution (faster), more points = higher resolution
+        n_points = len(x_clean)
+        if n_points < 100:
+            grid_res = 80
+        elif n_points < 500:
+            grid_res = 120
+        elif n_points < 2000:
+            grid_res = 150
+        elif n_points < 10000:
+            grid_res = 180
+        else:
+            # For very large datasets, cap resolution to avoid memory explosion
+            grid_res = 200
+
         xi = np.linspace(x.min(), x.max(), grid_res)
         yi = np.linspace(y.min(), y.max(), grid_res)
         XI, YI = np.meshgrid(xi, yi)
 
+        # Use fastest available interpolation method for large datasets
         interp_method = str(plot_opts.get("interpolation_method", "linear"))
-        intensity_grid = griddata((x_clean, y_clean), int_clean, (XI, YI), method=interp_method)
+        if n_points > 5000 and interp_method != "nearest":
+            interp_method = "linear"  # Avoid cubic/thin_plate_spline for very large datasets
         
-        # Fill the empty geometric hole left behind by the square with a neutral background or local fill
-        # Nearest neighbor interpolation can fill the inner gap seamlessly without artifacts
+        try:
+            intensity_grid = griddata((x_clean, y_clean), int_clean, (XI, YI), method=interp_method)
+        except Exception:
+            # Fallback to nearest neighbor if griddata fails
+            intensity_grid = griddata((x_clean, y_clean), int_clean, (XI, YI), method='nearest')
+        
+        # Fill NaN holes with nearest neighbor
         if np.any(np.isnan(intensity_grid)):
-            intensity_grid_fill = griddata((x_clean, y_clean), int_clean, (XI, YI), method='nearest')
-            intensity_grid = np.where(np.isnan(intensity_grid), intensity_grid_fill, intensity_grid)
+            try:
+                intensity_grid_fill = griddata((x_clean, y_clean), int_clean, (XI, YI), method='nearest')
+                intensity_grid = np.where(np.isnan(intensity_grid), intensity_grid_fill, intensity_grid)
+            except Exception:
+                pass  # If fill fails, leave NaNs as-is
 
     # ------------------------------------------------------------------------------------------------
         clip_percentile = bool(plot_opts.get("clip_percentile", True))
@@ -795,20 +1020,32 @@ class ProcessingPage(QWidget):
         cb_log.set_label(cb_label)
 
         # Vector Overlay (remains anchored to original sparse data coordinate arrays x and y)
-        if vector_overlay and e_u.ndim >= 2 and e_u.shape[1] >= 3:
+        # Skip vector overlay for very large datasets to avoid slowness
+        max_vectors_for_overlay = 2000
+        if vector_overlay and e_u.ndim >= 2 and e_u.shape[1] >= 3 and x.shape[0] <= max_vectors_for_overlay:
             uu = np.real(e_u[:, other[0]])
             vv = np.real(e_u[:, other[1]])
             step = max(1, vec_density)
             idx = np.arange(0, x.shape[0], step, dtype = int)
-            ax_lin.quiver(x[idx], y[idx], uu[idx], vv[idx],
-                    color = 'cyan', alpha = 0.75, width = 0.003)
+            try:
+                ax_lin.quiver(x[idx], y[idx], uu[idx], vv[idx],
+                        color = 'cyan', alpha = 0.75, width = 0.003)
+            except Exception:
+                # Skip vector overlay silently if it fails
+                pass
+        elif vector_overlay and x.shape[0] > max_vectors_for_overlay:
+            # Notify user that vector overlay is skipped for large datasets
+            ax_lin.text(0.5, 0.95, "Vector overlay skipped (too many points)", 
+                       transform=ax_lin.transAxes, ha='center', va='top',
+                       fontsize=8, color='gray', style='italic')
 
+        pol_label = self._format_pol_label(meta)
         fig.suptitle(
             "Field Intensity Map (slice {}={:.2f} nm, wl={:.2f} nm, pol={})".format(
                 slice_axis,
                 float(slice_value),
                 float(meta.get("wavelength_nm", 0.0)),
-                int(meta.get("polarization_idx", 0)),
+                pol_label,
             ),
             fontsize = 11,
         )
@@ -831,8 +1068,17 @@ class ProcessingPage(QWidget):
         ax = fig.add_subplot(121, projection = '3d')
         ax_hist = fig.add_subplot(122)
 
+        # For large datasets, downsample background scatter for performance
+        n_points = pos.shape[0]
+        max_bg_points = 10000
+        if n_points > max_bg_points:
+            bg_idx = np.random.choice(n_points, size = max_bg_points, replace = False)
+            pos_bg = pos[bg_idx]
+        else:
+            pos_bg = pos
+
         ax.scatter(
-            pos[:, 0], pos[:, 1], pos[:, 2],
+            pos_bg[:, 0], pos_bg[:, 1], pos_bg[:, 2],
             c = '#7f7f7f', s = 6, alpha = 0.08)
 
         if np.any(mask):
@@ -847,7 +1093,7 @@ class ProcessingPage(QWidget):
         ax.set_zlabel('z (nm)')
         ax.set_title(
             'Field Hotspots 3D |E|^2 (wl={:.2f} nm, pol={})'.format(
-                float(meta.get('wavelength_nm', 0.0)), int(meta.get('polarization_idx', 0))))
+                float(meta.get('wavelength_nm', 0.0)), self._format_pol_label(meta)))
 
         finite = intensity[np.isfinite(intensity)]
         if finite.size > 0:
@@ -893,7 +1139,7 @@ class ProcessingPage(QWidget):
 
         parts = [
             "<b>Wavelength:</b> {:.2f} nm".format(float(meta.get("wavelength_nm", 0.0))),
-            "<b>Pol:</b> {}".format(int(meta.get("polarization_idx", 0))),
+            "<b>Pol:</b> {}".format(self._format_pol_label(meta)),
             "<b>Slice:</b> {} = {:.2f} nm".format(opts.get("slice_axis", "z"), float(opts.get("slice_value", 0.0))),
             "<b>Clip Range:</b> [{:.4g} to {:.4g}]".format(v_low_val, v_high_val), # Shows the real values
             "<b>Max |E|²:</b> {:.4g}".format(float(stats.get("max", 0.0))),
@@ -903,39 +1149,65 @@ class ProcessingPage(QWidget):
         ]
         return " &nbsp;&nbsp;|&nbsp;&nbsp; ".join(parts)
 
+    def _format_pol_label(self, meta: dict) -> str:
+        pol_idx = int(meta.get("polarization_idx", 0))
+        if pol_idx < 0:
+            return "avg(all)"
+        return str(pol_idx)
+
     def _extract_field_slice(self, raw: dict, wl_idx: int = 0, pol_idx: int = 0):
         e = np.asarray(raw["e"])
         pos = np.asarray(raw["pos"])
         wl = np.asarray(raw.get("wavelength", []))
 
         wl_idx = max(0, int(wl_idx))
-        pol_idx = max(0, int(pol_idx))
+        requested_pol_idx = int(pol_idx)
+        average_all_pol = requested_pol_idx < 0
+        used_pol_idx = requested_pol_idx
 
         if e.ndim == 4:
             wl_idx = min(wl_idx, e.shape[0] - 1)
-            pol_idx = min(pol_idx, e.shape[3] - 1)
-            e_slice = e[wl_idx, :, :, pol_idx]
-        elif e.ndim == 3:
-            if wl.size > 0 and e.shape[0] == wl.size:
-                wl_idx = min(wl_idx, e.shape[0] - 1)
-                e_wl = e[wl_idx]
-            else:
-                e_wl = e
+            e_wl = e[wl_idx]
+        elif e.ndim == 3 and wl.size > 0 and e.shape[0] == wl.size:
+            wl_idx = min(wl_idx, e.shape[0] - 1)
+            e_wl = e[wl_idx]
+        else:
+            e_wl = e
 
-            if e_wl.ndim == 3 and e_wl.shape[1] == 3:
-                pol_idx = min(pol_idx, e_wl.shape[2] - 1)
-                e_slice = e_wl[:, :, min(pol_idx, e_wl.shape[2] - 1)]
-            elif e_wl.ndim == 3 and e_wl.shape[2] == 3:
-                pol_idx = min(pol_idx, e_wl.shape[1] - 1)
-                e_slice = e_wl[:, min(pol_idx, e_wl.shape[1] - 1), :]
-            elif e_wl.ndim == 2:
-                e_slice = e_wl
+        if e_wl.ndim == 2:
+            e_slice = e_wl
+            used_pol_idx = 0
+        elif e_wl.ndim == 3:
+            # Expected layouts after wavelength selection:
+            # (n_pos, 3, n_pol) or (n_pos, n_pol, 3)
+            if e_wl.shape[1] == 3 and e_wl.shape[2] != 3:
+                if average_all_pol:
+                    e_slice = np.mean(e_wl, axis = 2)
+                    used_pol_idx = -1
+                else:
+                    used_pol_idx = min(max(0, requested_pol_idx), e_wl.shape[2] - 1)
+                    e_slice = e_wl[:, :, used_pol_idx]
+            elif e_wl.shape[2] == 3 and e_wl.shape[1] != 3:
+                if average_all_pol:
+                    e_slice = np.mean(e_wl, axis = 1)
+                    used_pol_idx = -1
+                else:
+                    used_pol_idx = min(max(0, requested_pol_idx), e_wl.shape[1] - 1)
+                    e_slice = e_wl[:, used_pol_idx, :]
+            elif e_wl.shape[1] == 3 and e_wl.shape[2] == 3:
+                # Ambiguous (n_pos, 3, 3): default to component axis=1, polarization axis=2.
+                if average_all_pol:
+                    e_slice = np.mean(e_wl, axis = 2)
+                    used_pol_idx = -1
+                else:
+                    used_pol_idx = min(max(0, requested_pol_idx), e_wl.shape[2] - 1)
+                    e_slice = e_wl[:, :, used_pol_idx]
             else:
                 e_slice = e_wl.reshape(-1, 3)
-        elif e.ndim == 2:
-            e_slice = e
+                used_pol_idx = 0
         else:
-            e_slice = e.reshape(-1, 3)
+            e_slice = e_wl.reshape(-1, 3)
+            used_pol_idx = 0
 
         if e_slice.shape[1] != 3:
             e_slice = e_slice.reshape(pos.shape[0], 3)
@@ -948,7 +1220,7 @@ class ProcessingPage(QWidget):
         meta = {
             "wavelength_nm": float(wl[wl_idx]) if wl.size > wl_idx else 0.0,
             "wavelength_idx": wl_idx,
-            "polarization_idx": pol_idx,
+            "polarization_idx": used_pol_idx,
         }
         return field_slice, meta
 
