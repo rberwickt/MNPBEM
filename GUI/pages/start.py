@@ -1,4 +1,6 @@
 # page_two.py
+import os
+
 from typing import Tuple
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QPushButton, QLabel, QScrollArea, QHBoxLayout, QGroupBox, QFormLayout, QSpinBox, QMessageBox
@@ -119,7 +121,16 @@ class StartPage(QWidget):
         if n_gpus >= 1:
             n_workers = n_gpus
             n_gpus_per_worker = 1
-            n_threads = max(1, n_cpus // n_gpus)
+
+            # Conservative GPU default: too many BLAS/OMP threads per worker
+            # can throttle CPU-side orchestration and create bursty GPU usage.
+            phys_estimate = max(1, n_cpus // 2)
+            per_worker_phys = max(1, phys_estimate // n_gpus)
+            try:
+                cap = int(os.environ.get('MNPBEM_AUTO_GPU_THREADS_CAP', '4'))
+            except ValueError:
+                cap = 4
+            n_threads = max(1, min(per_worker_phys, max(1, cap)))
         else:
             n_gpus_per_worker = 0
             # since the os functions only finds logical processors (not physical cores), we can divide by 2 (assuming hyperthreading)
