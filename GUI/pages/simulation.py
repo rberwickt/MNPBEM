@@ -14,7 +14,7 @@ from pathlib import Path
 
 class SimulationPage(QWidget):
     sim_completed = Signal()  # Alert main.py when simulation finishes
-    RESPONSIVE_STACK_WIDTH = 1200
+    RESPONSIVE_STACK_WIDTH = 1500
 
     def __init__(self, state: SimulationState):
         super().__init__()

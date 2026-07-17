@@ -1,4 +1,5 @@
 import json
+import pickle
 
 from PySide6.QtWidgets import (
     QWidget,
@@ -50,10 +51,12 @@ class ProcessingPage(QWidget):
         self._btn_spec_run = None
         self._btn_spec_save_processed = None
         self._btn_spec_save_raw = None
+        self._btn_spec_save_raw_all = None
         self._spec_pol_selector = None
         self._btn_field_run = None
         self._btn_field_save_processed = None
         self._btn_field_save_raw = None
+        self._btn_field_save_raw_all = None
 
         self._build_ui()
         self.setup_ui_from_state()
@@ -86,6 +89,7 @@ class ProcessingPage(QWidget):
         self._btn_spec_run = QPushButton("Run Analysis")
         self._btn_spec_save_processed = QPushButton("Save Processed")
         self._btn_spec_save_raw = QPushButton("Save Raw")
+        self._btn_spec_save_raw_all = QPushButton("Save Raw (All)")
 
         self._spec_pol_selector = QComboBox()
         self._spec_pol_selector.addItem("All Polarizations", userData = -1)
@@ -97,10 +101,13 @@ class ProcessingPage(QWidget):
             lambda _checked = False: self._save_processed_output("spectrum"))
         self._btn_spec_save_raw.clicked.connect(
             lambda _checked = False: self._save_raw_output("spectrum"))
+        self._btn_spec_save_raw_all.clicked.connect(
+            lambda _checked = False: self._save_raw_output("all"))
 
         action_row.addWidget(self._btn_spec_run)
         action_row.addWidget(self._btn_spec_save_processed)
         action_row.addWidget(self._btn_spec_save_raw)
+        action_row.addWidget(self._btn_spec_save_raw_all)
         action_row.addWidget(QLabel("View:"))
         action_row.addWidget(self._spec_pol_selector)
         action_row.addStretch(1)
@@ -135,16 +142,20 @@ class ProcessingPage(QWidget):
         self._btn_field_run = QPushButton("Run Analysis")
         self._btn_field_save_processed = QPushButton("Save Processed")
         self._btn_field_save_raw = QPushButton("Save Raw")
+        self._btn_field_save_raw_all = QPushButton("Save Raw (All)")
 
         self._btn_field_run.clicked.connect(self._run_field_analysis)
         self._btn_field_save_processed.clicked.connect(
             lambda _checked = False: self._save_processed_output("field"))
         self._btn_field_save_raw.clicked.connect(
             lambda _checked = False: self._save_raw_output("field"))
+        self._btn_field_save_raw_all.clicked.connect(
+            lambda _checked = False: self._save_raw_output("all"))
 
         action_row.addWidget(self._btn_field_run)
         action_row.addWidget(self._btn_field_save_processed)
         action_row.addWidget(self._btn_field_save_raw)
+        action_row.addWidget(self._btn_field_save_raw_all)
         action_row.addStretch(1)
         layout.addLayout(action_row)
 
@@ -350,9 +361,11 @@ class ProcessingPage(QWidget):
             self._btn_spec_run,
             self._btn_spec_save_processed,
             self._btn_spec_save_raw,
+            self._btn_spec_save_raw_all,
             self._btn_field_run,
             self._btn_field_save_processed,
             self._btn_field_save_raw,
+            self._btn_field_save_raw_all,
         ):
             if btn is not None:
                 btn.setEnabled(enabled)
@@ -1406,6 +1419,10 @@ class ProcessingPage(QWidget):
             QMessageBox.warning(self, "No Raw Output", "No raw simulation output is available.")
             return
 
+        if kind == "all":
+            self._save_all_raw_output(raw)
+            return
+
         out_dir = QFileDialog.getExistingDirectory(self, "Select Output Folder")
         if not out_dir:
             return
@@ -1427,6 +1444,33 @@ class ProcessingPage(QWidget):
 
             msg = "Saved raw {} output:\n{}".format(kind, "\n".join(saved.values()))
             QMessageBox.information(self, "Saved", msg)
+        except Exception as exc:
+            QMessageBox.critical(self, "Save Raw Failed", str(exc))
+
+    def _save_all_raw_output(self, raw: dict):
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Full Raw Simulation Output",
+            "simulation_raw_all.pkl",
+            "Pickle Files (*.pkl)",
+        )
+
+        if not path:
+            return
+
+        try:
+            payload = {
+                "kind": "raw_all",
+                "keys": sorted([str(k) for k in raw.keys()]),
+                "raw_results": raw,
+            }
+            with open(path, "wb") as f:
+                pickle.dump(payload, f, protocol = pickle.HIGHEST_PROTOCOL)
+            QMessageBox.information(
+                self,
+                "Saved",
+                "Saved full raw simulation output to:\n{}".format(path),
+            )
         except Exception as exc:
             QMessageBox.critical(self, "Save Raw Failed", str(exc))
 
