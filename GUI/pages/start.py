@@ -129,8 +129,8 @@ class StartPage(QWidget):
             # tons of workers eats up a ton of memory for not a lot of benefit 
             # A good default is 2 to 4 workers, dividing the remaining cores into threads.
             # the function from the sim repo had 1 thread if on cpu only, which seemed wasteful
-            n_workers = max(1, min(4, phys_estimate)) 
-            n_threads = max(1, phys_estimate // n_workers)
+            n_workers = max(1, phys_estimate // 2) 
+            n_threads = max(1, phys_estimate // n_workers) # maybe 2 threads is better idk
 
         return n_workers, n_threads, n_gpus_per_worker
         
