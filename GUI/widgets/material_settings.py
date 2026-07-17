@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import (QGroupBox, QFormLayout, QHBoxLayout, QCheckBox)
+from PySide6.QtWidgets import (QGroupBox, QFormLayout, QHBoxLayout, QCheckBox, QDoubleSpinBox)
 from PySide6.QtCore import Qt
 from ..simulation_state import SimulationState
 from .material_dropdown import MaterialComboBox
@@ -28,10 +28,21 @@ class MaterialOptionsWidget(QGroupBox):
         self.layout.addRow("Substrate Material:", self.substrate_combo)
         self.layout.setRowVisible(self.substrate_combo, False) # hide since it is false by default
 
+        self.substrate_gap = QDoubleSpinBox()
+        self.substrate_gap.setRange(0.001, 10.0)
+        self.substrate_gap.setSingleStep(0.001)
+        self.substrate_gap.setDecimals(3)
+        self.substrate_gap.setSuffix(" nm")
+        self.layout.addRow("Substrate Gap:", self.substrate_gap)
+        self.layout.setRowVisible(self.substrate_gap, False)
+        self.substrate_gap.valueChanged.connect(lambda val: setattr(self.state, 'substrate_gap', val))
+
     def _handle_check(self, checkState):
         if checkState == Qt.CheckState.Checked:
             self.state.use_substrate = True
             self.layout.setRowVisible(self.substrate_combo, True)
+            self.layout.setRowVisible(self.substrate_gap, True)
         else:
             self.state.use_substrate = False
             self.layout.setRowVisible(self.substrate_combo, False)
+            self.layout.setRowVisible(self.substrate_gap, False)

@@ -57,6 +57,7 @@ class SimulationState:
     materials: list[str] = field(default_factory=list)            # particle material names (core->shell)
     environment_material: Optional[str] = None                    # 
     substrate_material: Optional[str] = None
+    substrate_gap: float = 0.001 # (nm)
 
     sphere_n_verts: int = 256 # sphere discretization target (trisphere vertex count)
     mesh_element_size_nm: float = 5.0 # rod/cube element size in nm (smaller = finer mesh / more faces)
@@ -445,7 +446,7 @@ class SimulationState:
         # substrate support
         if self.use_substrate and (self.substrate_material is not None):
             cfg["materials"]["use_substrate"] = True
-            cfg["materials"]["substrate"] = {"material": self.substrate_material, "gap": 0.001}
+            cfg["materials"]["substrate"] = {"material": self.substrate_material, "gap": self.substrate_gap}
 
         if self.env_n_gpus_per_worker > 0: # add the GPU precision setting if GPU is enabled
             cfg["compute"]["gpu_precision"] = str(self.gpu_precision).lower()
