@@ -61,7 +61,7 @@ class StructureSettingsWidget(QGroupBox):
         self.diameter2.setSuffix(" nm")
         self.diameter2.setValue(float(self.state.diameter))
         self.diameter2.valueChanged.connect(lambda val: setattr(self.state, 'diameter', val))
-        rod_layout.addRow("Diameter:", self.diameter2)
+        rod_layout.addRow("Short Axis:", self.diameter2)
         self.rod_mesh_size = QDoubleSpinBox()
         self.rod_mesh_size.setRange(0.1, 2000.0)
         self.rod_mesh_size.setDecimals(2)
@@ -80,7 +80,7 @@ class StructureSettingsWidget(QGroupBox):
         self.height_box.setSuffix(" nm")
         self.height_box.setValue(float(self.state.height))
         self.height_box.valueChanged.connect(lambda val: setattr(self.state, 'height', val))
-        rod_layout.addRow("Height:", self.height_box)
+        rod_layout.addRow("Long Axis:", self.height_box)
         
         # Cube Settings ===============================================
         self.cube_settings = QWidget()
@@ -90,7 +90,8 @@ class StructureSettingsWidget(QGroupBox):
         self.size_box.setSuffix(" nm")
         self.size_box.setValue(float(self.state.size))
         self.size_box.valueChanged.connect(lambda val: setattr(self.state, 'size', val))
-        cube_layout.addRow("Size:", self.size_box)
+        cube_layout.addRow("Edge Length:", self.size_box)
+
         self.cube_mesh_size = QDoubleSpinBox()
         self.cube_mesh_size.setRange(0.1, 2000.0)
         self.cube_mesh_size.setDecimals(2)

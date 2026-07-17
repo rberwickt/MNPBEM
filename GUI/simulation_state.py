@@ -23,28 +23,31 @@ class SimulationState:
 
     solver: str = "Retarded"
 
+    calc_fields: bool = True
+    calc_cross_sections: bool = True
+
     # Runtime environment setup (must be configured before mnpbem import)
     env_n_workers: int = 1
-    env_n_threads: int = 6
+    env_n_threads: int = 4
     env_n_gpus_per_worker: int = 0
 
     # Energy Range Settings ===========================================
     energy_in_nm: bool = True
     energy_min: float = 300.0
     energy_max: float = 1200.0
-    energy_steps: int = 10
-    rel_cutoff: int = 3 # higher is slower, NOTE: not changed by the user right now
+    energy_steps: int = 100
+    rel_cutoff: int = 3 # higher is slower, NOTE: recommended not to be changed by user, but can for testing
 
     # Field grid sampling (rectangular). Volumetric output requires
     # non-collapsed sampling along all 3 axes (especially z).
-    field_x_min: float = -50.0
-    field_x_max: float = 50.0
-    field_y_min: float = -50.0
-    field_y_max: float = 50.0
+    field_x_min: float = -150.0
+    field_x_max: float = 150.0
+    field_y_min: float = -150.0
+    field_y_max: float = 150.0
     field_z_min: float = 0.0
     field_z_max: float = 0.0
-    field_nx: int = 21
-    field_ny: int = 21
+    field_nx: int = 50
+    field_ny: int = 50
     field_nz: int = 1
 
     # Structure and Material Settings ===================================
@@ -362,8 +365,8 @@ class SimulationState:
             "enei_min": float(nm_min),
             "enei_max": float(nm_max),
             "n_wavelengths": int(self.energy_steps),
-            "calculate_cross_sections": True,
-            "calculate_fields": self.excitation_source == "Plane Wave",  # only calculate fields for plane wave excitation (only one supported out of the three)
+            "calculate_cross_sections": self.calc_cross_sections,
+            "calculate_fields": self.excitation_source == "Plane Wave" and self.calc_fields,  # only calculate fields for plane wave excitation (only one supported out of the three)
             "interp": self.interp,
             "relcutoff": int(self.rel_cutoff),
             "grid": {
