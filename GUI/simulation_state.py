@@ -496,6 +496,14 @@ class SimulationState:
         # Build config dict
         cfg = self.to_dict(output_dir=output_dir, output_name=output_name)
 
+        sim_cfg = cfg.get("simulation", {}) if isinstance(cfg, dict) else {}
+
+        # calculate_spectrum defaults to True in backend unless explicitly false.
+        wants_fields = bool(sim_cfg.get("calculate_fields", False))
+        wants_spectrum = bool(sim_cfg.get("calculate_spectrum", True))
+        if "calculate_cross_sections" in sim_cfg:
+            wants_spectrum = bool(sim_cfg.get("calculate_cross_sections", wants_spectrum))
+
         def _has_spectrum_payload(res: Any) -> bool:
             if not isinstance(res, dict):
                 return False
@@ -574,17 +582,24 @@ class SimulationState:
             n_wl = int(sim["n_wavelengths"])
             enei = np.linspace(e_min, e_max, n_wl)
 
-            _report("Dispatching simulation")
+            # For combined spectrum+field requests, run spectrum first.
+            # dispatch_single_node routes calculate_fields=True to FieldCalculator,
+            # which is much heavier for layered/substrate cases if sigma cache
+            # is cold. Running spectrum first warms sigma cache and avoids the
+            # expensive field fallback doing full BEM solves per wavelength.
+            cfg_dispatch = cfg
+            if wants_fields and wants_spectrum:
+                _report("Dispatching spectrum pass")
+                cfg_dispatch = copy.deepcopy(cfg)
+                cfg_dispatch.setdefault("simulation", {})
+                cfg_dispatch["simulation"]["calculate_spectrum"] = True
+                cfg_dispatch["simulation"]["calculate_cross_sections"] = True
+                cfg_dispatch["simulation"]["calculate_fields"] = False
+            else:
+                _report("Dispatching simulation")
+
             t0 = time.time()
-            result = dispatch_single_node(cfg, p, epstab, enei)
-
-            sim_cfg = cfg.get("simulation", {}) if isinstance(cfg, dict) else {}
-            wants_fields = bool(sim_cfg.get("calculate_fields", False))
-
-            # calculate_spectrum defaults to True in backend unless explicitly false.
-            wants_spectrum = bool(sim_cfg.get("calculate_spectrum", True))
-            if "calculate_cross_sections" in sim_cfg:
-                wants_spectrum = bool(sim_cfg.get("calculate_cross_sections", wants_spectrum))
+            result = dispatch_single_node(cfg_dispatch, p, epstab, enei)
 
             if wants_fields and (not _has_field_payload(result)):
                 _report("Running field follow-up pass for post-processing")
@@ -592,7 +607,9 @@ class SimulationState:
                 cfg_field.setdefault("simulation", {})
                 cfg_field["simulation"]["calculate_spectrum"] = False
                 cfg_field["simulation"]["calculate_fields"] = True
-                cfg_field["simulation"]["save_sigma_cache"] = False
+                # Keep sigma cache enabled so FieldCalculator can load the
+                # spectrum-pass sigma instead of recomputing heavy layer BEM.
+                cfg_field["simulation"]["save_sigma_cache"] = True
                 field_result = dispatch_single_node(cfg_field, p, epstab, enei)
                 result = _merge_result_payload(result, field_result)
 
