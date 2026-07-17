@@ -1,10 +1,14 @@
 # page_two.py
+from typing import Tuple
+
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QPushButton, QLabel, QScrollArea, QHBoxLayout, QGroupBox, QFormLayout, QSpinBox, QMessageBox
 from PySide6.QtCore import Signal, QFileSystemWatcher, QUrl, Qt
 from PySide6.QtGui import QDesktopServices
 
 from ..simulation_state import SimulationState
 from pathlib import Path
+
+from pymnpbem_simulation.auto_detect import detect_n_gpus, detect_n_cpus
 
 
 class StartPage(QWidget):
@@ -56,25 +60,42 @@ class StartPage(QWidget):
         self.layout.addWidget(QLabel("See user-defined/materials/vacuum.py for example function header!"))
         # could try an elif and name the function in the materials file something different if it returns more than one callable? 
         #   question for later: will it only ever be 1 or 2 callables returned?
-
+        
         self.env_group = QGroupBox("Environment Setup")
-        env_layout = QFormLayout(self.env_group)
+        setup_layout = QHBoxLayout(self.env_group)
+        env_layout = QFormLayout()
+        setup_layout.addLayout(env_layout)
 
         self.n_workers_input = QSpinBox()
         self.n_workers_input.setRange(1, 256)
-        self.n_workers_input.setValue(int(getattr(self.state, "env_n_workers", 1)))
 
         self.n_threads_input = QSpinBox()
         self.n_threads_input.setRange(1, 512)
-        self.n_threads_input.setValue(int(getattr(self.state, "env_n_threads", 6)))
+        
 
         self.n_gpus_input = QSpinBox()
         self.n_gpus_input.setRange(0, 16)
-        self.n_gpus_input.setValue(int(getattr(self.state, "env_n_gpus_per_worker", 0)))
+        
 
-        env_layout.addRow("Workers", self.n_workers_input)
-        env_layout.addRow("Threads", self.n_threads_input)
-        env_layout.addRow("GPUs per worker", self.n_gpus_input)
+        env_layout.addRow("Workers:", self.n_workers_input)
+        env_layout.addRow("Threads:", self.n_threads_input)
+        env_layout.addRow("GPUs per worker:", self.n_gpus_input)
+
+        # auto detect cpus and gpus then create a plan for the user automatically
+        detected_layout = QVBoxLayout()
+        found_gpus = detect_n_gpus()
+        found_cpus = detect_n_cpus()
+        auto_plan = self._auto_compute_plan(found_gpus, found_cpus)
+        detected_layout.addWidget(QLabel(f"Detected {found_cpus} CPU Logical Processors"))
+        detected_layout.addWidget(QLabel(f"Detected {found_gpus} GPUs"))
+        detected_layout.addWidget(QLabel(f"Recommended:\n{auto_plan[0]} workers, {auto_plan[1]} threads, {auto_plan[2]} GPUs per worker"))
+
+        self.n_workers_input.setValue(auto_plan[0])
+        self.n_threads_input.setValue(auto_plan[1])
+        self.n_gpus_input.setValue(auto_plan[2])
+
+        setup_layout.addLayout(detected_layout)
+
 
         self.layout.addWidget(self.env_group)
         self.layout.addLayout(self.displays_layout)
@@ -87,6 +108,31 @@ class StartPage(QWidget):
         self.run_btn = QPushButton("Continue to Simulation", self)
         self.run_btn.clicked.connect(self.finish_loading)
         self.layout.addWidget(self.run_btn)
+
+    def _auto_compute_plan(self, n_gpus: int = -1, n_cpus: int = -1) -> Tuple[int, int, int]:
+        if n_gpus < 0:
+            n_gpus = detect_n_gpus()
+
+        if n_cpus < 0:
+            n_cpus = detect_n_cpus()
+
+        if n_gpus >= 1:
+            n_workers = n_gpus
+            n_gpus_per_worker = 1
+            n_threads = max(1, n_cpus // n_gpus)
+        else:
+            n_gpus_per_worker = 0
+            # since the os functions only finds logical processors (not physical cores), we can divide by 2 (assuming hyperthreading)
+            # to get an estimate of the physical cores
+            phys_estimate = max(1, n_cpus // 2)
+
+            # tons of workers eats up a ton of memory for not a lot of benefit 
+            # A good default is 2 to 4 workers, dividing the remaining cores into threads.
+            # the function from the sim repo had 1 thread if on cpu only, which seemed wasteful
+            n_workers = max(1, min(4, phys_estimate)) 
+            n_threads = max(1, phys_estimate // n_workers)
+
+        return n_workers, n_threads, n_gpus_per_worker
         
     def open_file_directory(self):
         QDesktopServices.openUrl(self.user_url)
