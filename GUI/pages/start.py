@@ -87,8 +87,8 @@ class StartPage(QWidget):
         found_cpus = detect_n_cpus()
         auto_plan = self._auto_compute_plan(found_gpus, found_cpus)
         detected_layout.addWidget(QLabel(f"Detected {found_cpus} CPU Logical Processors"))
-        detected_layout.addWidget(QLabel(f"Detected {found_gpus} GPUs"))
-        detected_layout.addWidget(QLabel(f"Recommended:\n{auto_plan[0]} workers, {auto_plan[1]} threads, {auto_plan[2]} GPUs per worker"))
+        detected_layout.addWidget(QLabel(f"Detected {found_gpus} GPU(s)"))
+        detected_layout.addWidget(QLabel(f"Recommended:\n{auto_plan[0]} worker(s), {auto_plan[1]} thread(s), {auto_plan[2]} GPU(s) per worker"))
 
         self.n_workers_input.setValue(auto_plan[0])
         self.n_threads_input.setValue(auto_plan[1])
