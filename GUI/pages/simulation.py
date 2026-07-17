@@ -1,5 +1,5 @@
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QPushButton, QLabel, QHBoxLayout, QMessageBox
-from PySide6.QtCore import Signal
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QPushButton, QMessageBox, QScrollArea, QBoxLayout, QSizePolicy
+from PySide6.QtCore import Signal, Qt, QTimer
 from ..simulation_state import SimulationState
 from ..widgets.solver_options import SolverOptionsWidget
 from ..widgets.excitation_settings import ExcitationSettingsWidget
@@ -14,12 +14,30 @@ from pathlib import Path
 
 class SimulationPage(QWidget):
     sim_completed = Signal()  # Alert main.py when simulation finishes
+    RESPONSIVE_STACK_WIDTH = 1200
 
     def __init__(self, state: SimulationState):
         super().__init__()
         self.state = state  # Access to the shared state
+
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        self.scroll_area = QScrollArea(self)
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        self.content_widget = QWidget(self.scroll_area)
+        self.content_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.columns = QBoxLayout(QBoxLayout.LeftToRight)
+        self.columns.setContentsMargins(8, 8, 8, 8)
+        self.columns.setSpacing(12)
+        self.content_widget.setLayout(self.columns)
+        self.scroll_area.setWidget(self.content_widget)
+        root_layout.addWidget(self.scroll_area)
         
-        self.columns = QHBoxLayout(self)
         self.col_1 = QVBoxLayout()
         
         self.solver_options = SolverOptionsWidget(state)
@@ -61,6 +79,49 @@ class SimulationPage(QWidget):
         self.columns.addLayout(self.col_1)
         self.columns.addLayout(self.col_2)
         self.columns.addLayout(self.col_3)
+
+        self._set_column_widget_policies()
+        self._update_responsive_layout()
+        QTimer.singleShot(0, self._update_responsive_layout)
+
+    def _set_column_widget_policies(self):
+        """Allow child sections to shrink and grow with the available width."""
+        self.setMinimumWidth(0)
+        self.content_widget.setMinimumWidth(0)
+
+        self.solver_options.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.solver_options.setMinimumWidth(0)
+        self.energy_range.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.energy_range.setMinimumWidth(0)
+        self.field_grid.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.field_grid.setMinimumWidth(0)
+
+        self.material_settings.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.material_settings.setMinimumWidth(0)
+        self.structure_settings.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.structure_settings.setMinimumWidth(0)
+        self.refractive_index.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.refractive_index.setMinimumWidth(0)
+
+        self.excitation_settings.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.excitation_settings.setMinimumWidth(0)
+        self.run_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+    def _update_responsive_layout(self):
+        available_width = self.scroll_area.viewport().width()
+        if available_width < self.RESPONSIVE_STACK_WIDTH:
+            self.columns.setDirection(QBoxLayout.TopToBottom)
+        else:
+            self.columns.setDirection(QBoxLayout.LeftToRight)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_responsive_layout()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Ensure the first layout mode uses real viewport geometry.
+        QTimer.singleShot(0, self._update_responsive_layout)
 
     def setup_ui_from_state(self):
         """Called by main window right before switching to this page"""

@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import (QGroupBox, QFormLayout, QHBoxLayout, QCheckBox, QVBoxLayout, QLabel, QPushButton, QComboBox)
+from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QComboBox, QSizePolicy)
 from PySide6.QtCore import Qt
 import numpy as np
 import importlib.util
@@ -20,17 +20,23 @@ class RefractiveIndexWidget(QGroupBox):
         super().__init__("Refractive Index", parent)
         self.state = state
         self.layout = QVBoxLayout(self)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setMinimumWidth(0)
 
         title_bar = QHBoxLayout()
+        title_bar.setContentsMargins(0, 0, 0, 0)
         self.material_dropdown = MaterialComboBox(state)
+        self.material_dropdown.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         title_bar.addWidget(QLabel("Material:"))
         title_bar.addWidget(self.material_dropdown)
 
         self.eps_select = QComboBox()
         self.eps_select.addItems(["Real", "Imaginary", "Both"])
+        self.eps_select.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self.eps_select.currentTextChanged.connect(self.update_plot)
 
         self.refresh_btn = QPushButton("Refresh Plot")
+        self.refresh_btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self.refresh_btn.clicked.connect(self.update_plot)
         title_bar.addWidget(self.eps_select)
         title_bar.addWidget(self.refresh_btn)
@@ -55,7 +61,7 @@ class RefractiveIndexWidget(QGroupBox):
         if selected_material != "": # default value for empty material dropdown
             new_fig = self.construct_figure()
             self.figure = CalculationFigure(new_fig)
-            self.layout.addWidget(self.figure)
+            self.layout.addWidget(self.figure, 1)
 
     def construct_figure(self) -> Figure:
         selected_material = self.material_dropdown.currentText()
@@ -70,7 +76,7 @@ class RefractiveIndexWidget(QGroupBox):
         real, imag = self._get_eps_components(selected_material, wavelengths)
 
         # figure building
-        fig = Figure()
+        fig = Figure(figsize = (4.2, 2.8))
         ax = fig.add_subplot(111)
         if self.eps_select.currentText() == "Real":
             ax.plot(wavelengths, real, label="Eps1 (Real)")
@@ -83,6 +89,7 @@ class RefractiveIndexWidget(QGroupBox):
         ax.set_ylabel("Refractive Index")
         ax.legend()
         ax.set_title(f"Refractive Index for {selected_material}")
+
         return fig
 
     def _resolve_material_from_descriptor(self, material_name: str): # changing everything to descriptors comes back to bite me...
