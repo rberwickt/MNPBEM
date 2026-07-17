@@ -22,6 +22,7 @@ class SimulationState:
     raw_results: Optional[Any] = None               # Simulation output (Sigma)
 
     solver: str = "Retarded"
+    gpu_precision: str = "fp64" # will either be 'fp64' or 'fp32', only used if GPU is enabled
 
     calc_fields: bool = True
     calc_cross_sections: bool = True
@@ -446,6 +447,9 @@ class SimulationState:
             cfg["materials"]["use_substrate"] = True
             cfg["materials"]["substrate"] = {"material": self.substrate_material, "gap": 0.001}
 
+        if self.env_n_gpus_per_worker > 0: # add the GPU precision setting if GPU is enabled
+            cfg["compute"]["gpu_precision"] = str(self.gpu_precision).lower()
+            
         return cfg
 
     def save_config_yaml(self, path: str) -> None:

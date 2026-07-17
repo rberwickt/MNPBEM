@@ -115,3 +115,48 @@ QSpinBox, QDoubleSpinBox {
     /* We use an outline-safe color assignment instead of custom structural geometry */
     selection-background-color: #C2EABD; 
 }
+
+QRadioButton {
+    background-color: transparent;
+    spacing: 8px;
+}
+
+QRadioButton::indicator {
+    width: 16px;
+    height: 16px;
+    border-radius: 9px; /* Half of width/height + border to keep it perfectly round */
+    border: 2px solid #AED6B1;
+    background-color: #FFFFFF;
+}
+
+QRadioButton::indicator:hover {
+    border-color: #A3E4D7;
+}
+
+QRadioButton::indicator:checked {
+    background-color: #C2EABD; /* Your theme's mint color fills the middle */
+    border-color: #AED6B1;
+    image: url(none); /* Clears any native operating system checkmarks */
+}
+
+QCheckBox {
+    background-color: transparent; /* Removes any background block around the widget */
+    spacing: 8px;                  /* Clean spacing between the box and text */
+}
+
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #E0E6E3;     /* Subtle, clean border matching your groupbox */
+    border-radius: 4px;            /* Slightly rounded corners */
+    background-color: #FFFFFF;     /* Clean white interior */
+}
+
+QCheckBox::indicator:hover {
+    border: 1px solid #A3E4D7;     /* Highlight on hover */
+}
+
+QCheckBox::indicator:checked {
+    background-color: #C2EABD;     /* Mint background when toggled on */
+    border: 1px solid #AED6B1;
+}
