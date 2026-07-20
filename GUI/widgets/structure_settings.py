@@ -7,141 +7,6 @@ from ..simulation_state import SimulationState
 from .material_dropdown import MaterialComboBox
 from .structure_view import StructurePreviewDialog
 
-
-class ShellsPanel(QGroupBox):
-    """Independent shells management panel for core-shell structures.
-    
-    Uses a custom list layout instead of QTableWidget to avoid widget rendering issues.
-    Each shell row: [Thickness] [Material] [Remove]
-    Shells automatically inherit core mesh density from core shape.
-    """
-    shells_changed = Signal()  # Emitted when shells list is modified
-    
-    def __init__(self, state: SimulationState, parent=None):
-        super().__init__("Shells (Optional)", parent)
-        self.state = state
-        self.shell_rows = []  # List of ShellRowWidget objects
-        
-        layout = QVBoxLayout(self)
-        
-        # Header row
-        header = QHBoxLayout()
-        header.setContentsMargins(5, 5, 5, 5)
-        header.addWidget(QLabel("Thickness"), 1)
-        header.addWidget(QLabel("Material"), 1)
-        header.addWidget(QLabel(""), 0)  # Remove button column
-        layout.addLayout(header)
-        
-        # Scrollable container for shell rows
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setMaximumHeight(200)
-        self.shells_container = QWidget()
-        self.shells_layout = QVBoxLayout(self.shells_container)
-        self.shells_layout.setContentsMargins(0, 0, 0, 0)
-        self.shells_layout.setSpacing(2)
-        scroll.setWidget(self.shells_container)
-        layout.addWidget(scroll)
-        
-        # Add Shell button
-        btn_layout = QHBoxLayout()
-        self.add_shell_btn = QPushButton("+ Add Shell")
-        self.add_shell_btn.clicked.connect(self._on_add_shell)
-        btn_layout.addWidget(self.add_shell_btn)
-        btn_layout.addStretch()
-        layout.addLayout(btn_layout)
-        
-        self._refresh_shells()
-    
-    def _refresh_shells(self):
-        """Rebuild shell rows from state."""
-        # Clear existing rows
-        for row in self.shell_rows:
-            row.deleteLater()
-        self.shell_rows = []
-        
-        # Create new rows
-        for i, shell in enumerate(self.state.shells):
-            row = ShellRowWidget(i, shell, self.state)
-            row.thickness_changed.connect(lambda val, idx=i: self._on_thickness_changed(idx, val))
-            row.material_changed.connect(lambda mat, idx=i: self._on_material_changed(idx, mat))
-            row.remove_clicked.connect(lambda checked=False, idx=i: self._on_remove_shell(idx))
-            self.shells_layout.addWidget(row)
-            self.shell_rows.append(row)
-        
-        self.shells_layout.addStretch()
-    
-    def _on_thickness_changed(self, idx: int, val: float):
-        if idx < len(self.state.shells):
-            self.state.shells[idx]['thickness'] = float(val)
-            self.shells_changed.emit()
-    
-    def _on_material_changed(self, idx: int, material: str):
-        if idx < len(self.state.shells):
-            self.state.shells[idx]['material'] = str(material)
-            self.shells_changed.emit()
-    
-    def _on_add_shell(self):
-        """Add a new shell with default values."""
-        new_shell = {
-            'thickness': 1.0,
-            'material': 'silver'
-        }
-        self.state.shells.append(new_shell)
-        self.state.core_shell_enabled = True
-        self._refresh_shells()
-        self.shells_changed.emit()
-    
-    def _on_remove_shell(self, idx: int):
-        """Remove shell at given index."""
-        if 0 <= idx < len(self.state.shells):
-            del self.state.shells[idx]
-            self.state.core_shell_enabled = len(self.state.shells) > 0
-            self._refresh_shells()
-            self.shells_changed.emit()
-    
-    def refresh(self):
-        """Refresh rows from state (call after external state changes)."""
-        self._refresh_shells()
-
-
-class ShellRowWidget(QWidget):
-    """Single shell row with all controls."""
-    thickness_changed = Signal(float)
-    material_changed = Signal(str)
-    remove_clicked = Signal()
-    
-    def __init__(self, idx: int, shell: dict, state: SimulationState, parent=None):
-        super().__init__(parent)
-        self.idx = idx
-        self.shell = shell
-        self.state = state
-        
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(5)
-        
-        # Thickness spinbox
-        self.thick_spin = QDoubleSpinBox()
-        self.thick_spin.setRange(0.1, 2000.0)
-        self.thick_spin.setSuffix(" nm")
-        self.thick_spin.setValue(float(shell.get('thickness', 1.0)))
-        self.thick_spin.valueChanged.connect(lambda val: self.thickness_changed.emit(val))
-        layout.addWidget(self.thick_spin, 1)
-        
-        # Material dropdown
-        self.mat_combo = MaterialComboBox(self.state)
-        self.mat_combo.setCurrentText(str(shell.get('material', 'silver')))
-        self.mat_combo.currentTextChanged.connect(lambda mat: self.material_changed.emit(mat))
-        layout.addWidget(self.mat_combo, 1)
-        
-        # Remove button
-        self.remove_btn = QPushButton("Remove")
-        self.remove_btn.setMaximumWidth(80)
-        self.remove_btn.clicked.connect(self.remove_clicked.emit)
-        layout.addWidget(self.remove_btn, 0)
-
-
 class StructureSettingsWidget(QGroupBox):
     def __init__(self, state: SimulationState, parent=None):
         super().__init__("Structure Settings", parent)
@@ -300,3 +165,180 @@ class StructureSettingsWidget(QGroupBox):
         # Can be extended later for additional UI updates
         pass
         
+class ShellsPanel(QGroupBox):
+    """Independent shells management panel for core-shell structures.
+    
+    Uses a custom list layout instead of QTableWidget to avoid widget rendering issues.
+    Each shell row: [Thickness] [Material] [Remove]
+    Shells automatically inherit core mesh density from core shape.
+    """
+    shells_changed = Signal()  # Emitted when shells list is modified
+    
+    def __init__(self, state, parent=None):
+        super().__init__("Shells (Optional)", parent)
+        self.state = state
+        self.shell_rows = []  # List of ShellRowWidget objects
+        self.max_visible_shell_rows = 4  # Changed to scroll after 4 entries
+        
+        layout = QVBoxLayout(self)
+        
+        # Header row
+        header = QHBoxLayout()
+        header.setContentsMargins(2, 2, 2, 2)
+        header.setSpacing(6)
+        
+        num_label = QLabel("#")
+        num_label.setAlignment(Qt.AlignCenter)
+        num_label.setFixedWidth(24)
+        
+        header.addWidget(num_label, 0)
+        header.addWidget(QLabel("Thickness"), 1)
+        header.addWidget(QLabel("Material"), 1)
+        
+        # Add a dummy label to account for the remove button's width, keeping columns aligned
+        dummy_label = QLabel("")
+        dummy_label.setFixedWidth(36)
+        header.addWidget(dummy_label, 0)
+
+        layout.addLayout(header)
+        
+        # Scrollable container for shell rows
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.shells_container = QWidget()
+        self.shells_layout = QVBoxLayout(self.shells_container)
+        self.shells_layout.setContentsMargins(0, 0, 0, 0)
+        self.shells_layout.setSpacing(1)
+        scroll.setWidget(self.shells_container)
+        self.shells_scroll = scroll
+        layout.addWidget(self.shells_scroll)
+        
+        # Add Shell button
+        btn_layout = QHBoxLayout()
+        self.add_shell_btn = QPushButton("+ Add Shell")
+        self.add_shell_btn.clicked.connect(self._on_add_shell)
+        btn_layout.addWidget(self.add_shell_btn)
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+        
+        self._refresh_shells()
+    
+    def _refresh_shells(self):
+        """Rebuild shell rows from state."""
+        # Clear existing rows/layout items to avoid accumulating stretch spacers.
+        while self.shells_layout.count():
+            item = self.shells_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        self.shell_rows = []
+        
+        # Create new rows
+        for i, shell in enumerate(self.state.shells):
+            row = ShellRowWidget(i, shell, self.state)
+            row.thickness_changed.connect(lambda val, idx=i: self._on_thickness_changed(idx, val))
+            row.material_changed.connect(lambda mat, idx=i: self._on_material_changed(idx, mat))
+            row.remove_clicked.connect(lambda checked=False, idx=i: self._on_remove_shell(idx))
+            self.shells_layout.addWidget(row)
+            self.shell_rows.append(row)
+        
+        self.shells_layout.addStretch()
+        self._update_scroll_height()
+
+    def _update_scroll_height(self):
+        """Keep scroll area at a constant height for max_visible_shell_rows."""
+        row_height = 30
+        fixed_rows = self.max_visible_shell_rows  # Always use 4 rows for the calculation
+        frame_padding = 4
+        layout_spacing = max(0, fixed_rows - 1) * self.shells_layout.spacing()
+        
+        # Calculate exact height needed for 4 rows + padding + spacing
+        target_height = (fixed_rows * row_height) + frame_padding + layout_spacing
+        
+        # This locks the height permanently so the box never shrinks
+        self.shells_scroll.setFixedHeight(target_height)
+    
+    def _on_thickness_changed(self, idx: int, val: float):
+        if idx < len(self.state.shells):
+            self.state.shells[idx]['thickness'] = float(val)
+            self.shells_changed.emit()
+    
+    def _on_material_changed(self, idx: int, material: str):
+        if idx < len(self.state.shells):
+            self.state.shells[idx]['material'] = str(material)
+            self.shells_changed.emit()
+    
+    def _on_add_shell(self):
+        """Add a new shell with default values."""
+        new_shell = {
+            'thickness': 1.0,
+            'material': 'silver'
+        }
+        self.state.shells.append(new_shell)
+        self.state.core_shell_enabled = True
+        self._refresh_shells()
+        self.shells_changed.emit()
+    
+    def _on_remove_shell(self, idx: int):
+        """Remove shell at given index."""
+        if 0 <= idx < len(self.state.shells):
+            del self.state.shells[idx]
+            self.state.core_shell_enabled = len(self.state.shells) > 0
+            self._refresh_shells()
+            self.shells_changed.emit()
+    
+    def refresh(self):
+        """Refresh rows from state (call after external state changes)."""
+        self._refresh_shells()
+
+
+class ShellRowWidget(QWidget):
+    """Single shell row with all controls."""
+    thickness_changed = Signal(float)
+    material_changed = Signal(str)
+    remove_clicked = Signal()
+    
+    def __init__(self, idx: int, shell: dict, state, parent=None):
+        super().__init__(parent)
+        self.idx = idx
+        self.shell = shell
+        self.state = state
+        
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(2, 1, 2, 1)
+        layout.setSpacing(6)
+
+        self.index_label = QLabel("{}".format(self.idx + 1))
+        self.index_label.setAlignment(Qt.AlignCenter)
+        self.index_label.setFixedWidth(24)
+        layout.addWidget(self.index_label, 0)
+        
+        # Thickness spinbox
+        self.thick_spin = QDoubleSpinBox()
+        self.thick_spin.setRange(0.1, 2000.0)
+        self.thick_spin.setSuffix(" nm")
+        self.thick_spin.setValue(float(shell.get('thickness', 1.0)))
+        self.thick_spin.setMaximumHeight(26)
+        self.thick_spin.valueChanged.connect(lambda val: self.thickness_changed.emit(val))
+        layout.addWidget(self.thick_spin, 1)
+        
+        # Material dropdown
+        self.mat_combo = MaterialComboBox(self.state)
+        self.mat_combo.setMaximumHeight(26)
+        self.mat_combo.currentTextChanged.connect(lambda mat: self.material_changed.emit(mat))
+        layout.addWidget(self.mat_combo, 1)
+        
+        # Remove button
+        self.remove_btn = QPushButton("X")
+        self.remove_btn.setStyleSheet("padding: 0px; margin: 0px;")
+        self.remove_btn.setToolTip("Remove shell")
+        
+        # Increased width to 36 so text isn't clipped by button padding
+        self.remove_btn.setMinimumWidth(36)
+        self.remove_btn.setMaximumWidth(36)
+        self.remove_btn.setMaximumHeight(26)
+        
+        self.remove_btn.clicked.connect(self.remove_clicked.emit)
+        layout.addWidget(self.remove_btn, 0)
