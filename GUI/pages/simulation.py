@@ -60,15 +60,15 @@ class SimulationPage(QWidget):
         self.structure_settings = StructureSettingsWidget(state)
         self.col_2.addWidget(self.structure_settings)
 
-        self.refractive_index = RefractiveIndexWidget(state)
-        self.col_2.addWidget(self.refractive_index)
-
         self.col_2.addStretch()
 
         self.col_3 = QVBoxLayout()
 
         self.excitation_settings = ExcitationSettingsWidget(state)
         self.col_3.addWidget(self.excitation_settings)
+
+        self.refractive_index = RefractiveIndexWidget(state)
+        self.col_3.addWidget(self.refractive_index)
 
         self.run_btn = QPushButton("Run Simulation", self)
         self.run_btn.clicked.connect(self.on_run_simulation_clicked)

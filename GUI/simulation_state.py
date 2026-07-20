@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, Callable, Dict
 
 import traceback
+import ctypes
 from pathlib import Path
 import threading
 import shutil
@@ -91,13 +92,6 @@ class SimulationState:
         default_factory = lambda: [[0, 0, 1]]
     )
 
-    pol_x: int = 1
-    pol_y: int = 0
-    pol_z: int = 0
-
-    pol_dir_x: int = 0
-    pol_dir_y: int = 0
-    pol_dir_z: int = 1
 
         # Electron Beam Settings =======
     beam_energy: float = 200e3 # (eV)
@@ -692,3 +686,35 @@ class SimulationState:
         thread = threading.Thread(target=_worker, daemon=True)
         thread.start()
         return thread
+
+    def cancel_simulation_thread(self, thread: Optional[threading.Thread]) -> bool:
+        """Force-stop the GUI simulation worker thread (best effort).
+
+        This keeps the existing threaded pipeline intact while allowing a
+        practical hard-cancel from the dialog.
+        """
+        if thread is None:
+            return False
+
+        if not thread.is_alive():
+            return True
+
+        thread_id = thread.ident
+        if thread_id is None:
+            return False
+
+        try:
+            async_exc = ctypes.pythonapi.PyThreadState_SetAsyncExc
+            async_exc.argtypes = [ctypes.c_ulong, ctypes.py_object]
+            async_exc.restype = ctypes.c_int
+
+            result = async_exc(ctypes.c_ulong(thread_id), ctypes.py_object(SystemExit))
+            if result == 0:
+                return False
+            if result > 1:
+                # Revert if CPython reports multiple targets.
+                async_exc(ctypes.c_ulong(thread_id), None)
+                return False
+            return True
+        except Exception:
+            return False

@@ -3,6 +3,7 @@ from PySide6.QtCore import Qt, Signal, QObject, Slot
 from PySide6.QtGui import QFont
 from ..simulation_state import SimulationState
 from pathlib import Path
+import shutil
 
 
 class SimulationWorkerSignals(QObject):
@@ -26,8 +27,10 @@ class SimulationProgressDialog(QDialog):
         super().__init__(parent)
         self.state = state
         self.output_dir = output_dir or str(Path(".") / "tmp" / "simulation_run")
+        self.output_name = "simulation"
         self.simulation_thread = None
         self.is_running = False
+        self.cancel_requested = False
         
         # Create signals for thread-safe communication
         self.signals = SimulationWorkerSignals()
@@ -96,6 +99,7 @@ class SimulationProgressDialog(QDialog):
             return
         
         self.is_running = True
+        self.cancel_requested = False
         self.cancel_btn.setEnabled(True)
         self.close_btn.setEnabled(False)
         self.output_text.clear()
@@ -110,10 +114,35 @@ class SimulationProgressDialog(QDialog):
             on_error=self.signals.error.emit,
             on_progress=self.signals.progress.emit,
             output_dir=self.output_dir,
-            output_name="simulation",
+            output_name=self.output_name,
             save_outputs=save_outputs,
             n_threads=n_threads
         )
+
+    def _run_output_path(self) -> Path:
+        return Path(self.output_dir) / self.output_name
+
+    def _clear_run_artifacts(self) -> None:
+        """Best-effort cleanup for canceled/aborted runs in GUI tmp output."""
+        output_path = self._run_output_path()
+
+        # Clear simulation result payload stored in shared GUI state.
+        self.state.raw_results = None
+
+        # Remove sigma cache folder first (if available), then clean output dir.
+        try:
+            from pymnpbem_simulation import sigma_cache as _sc
+            sigma_root = Path(_sc.sigma_dir(str(output_path)))
+            if sigma_root.exists():
+                shutil.rmtree(sigma_root, ignore_errors=True)
+        except Exception:
+            pass
+
+        try:
+            if output_path.exists():
+                shutil.rmtree(output_path, ignore_errors=True)
+        except Exception:
+            pass
 
     @Slot(str)
     def append_output(self, message: str):
@@ -128,7 +157,13 @@ class SimulationProgressDialog(QDialog):
     @Slot(dict)
     def on_simulation_success(self, result: dict):
         """Handle successful simulation completion."""
+        if self.cancel_requested:
+            # User canceled while worker was still running; drop late result.
+            self._clear_run_artifacts()
+            return
+
         self.is_running = False
+        self.simulation_thread = None
         self.cancel_btn.setEnabled(False)
         self.close_btn.setEnabled(True)
         
@@ -145,7 +180,13 @@ class SimulationProgressDialog(QDialog):
     @Slot(Exception)
     def on_simulation_error(self, exception: Exception):
         """Handle simulation error."""
+        if self.cancel_requested:
+            # User canceled while worker was still running; ignore late error.
+            self._clear_run_artifacts()
+            return
+
         self.is_running = False
+        self.simulation_thread = None
         self.cancel_btn.setEnabled(False)
         self.close_btn.setEnabled(True)
         
@@ -164,15 +205,26 @@ class SimulationProgressDialog(QDialog):
     def on_cancel(self):
         """Handle cancel button click."""
         if self.is_running:
-            self.append_output("\nCancel requested: WONT STOP THE SIM (not implemented yet!)")
+            self.cancel_requested = True
+            self.is_running = False
+            killed = self.state.cancel_simulation_thread(self.simulation_thread)
+            if killed:
+                self.append_output("\nCancel requested. Worker thread stop signal sent.")
+            else:
+                self.append_output("\nCancel requested. Could not confirm worker thread stop signal.")
+
+            self.append_output("Clearing current run results/cache and returning to simulation setup.")
+            self._clear_run_artifacts()
+            self.simulation_thread = None
             self.cancel_btn.setEnabled(False)
             self.close_btn.setEnabled(True)
+            self.reject()
         else:
             self.reject()
 
     def closeEvent(self, event):
         """Handle dialog close event."""
-        if self.is_running:
+        if self.is_running and (not self.cancel_requested):
             # Don't allow closing while simulation is running
             event.ignore()
         else:
