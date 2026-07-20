@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 
 from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QLabel, QVBoxLayout,
-        QWidget, QPushButton)
+        QWidget, QPushButton, QCheckBox, QHBoxLayout)
 
 
 class StructurePreviewDialog(QDialog):
@@ -12,6 +12,7 @@ class StructurePreviewDialog(QDialog):
         self.state = state
         self.plotter = None
         self._initial_camera_position = None
+        self.show_all_layers = True  # Default: show all layers
 
         self.setWindowTitle('Structure Mesh Preview')
         self.resize(960, 720)
@@ -20,6 +21,16 @@ class StructurePreviewDialog(QDialog):
         self.layout = QVBoxLayout(self)
         self.status_label = QLabel('Initializing preview...')
         self.layout.addWidget(self.status_label)
+
+        # Layer visibility control (only show if core-shell enabled)
+        if self.state.core_shell_enabled and len(self.state.shells) > 0:
+            control_layout = QHBoxLayout()
+            self.show_layers_check = QCheckBox("Show all shell layers")
+            self.show_layers_check.setChecked(True)
+            self.show_layers_check.stateChanged.connect(self._on_layer_visibility_changed)
+            control_layout.addWidget(self.show_layers_check)
+            control_layout.addStretch()
+            self.layout.addLayout(control_layout)
 
         self.viewer_container = QWidget(self)
         self.viewer_layout = QVBoxLayout(self.viewer_container)
@@ -50,6 +61,15 @@ class StructurePreviewDialog(QDialog):
                 reset_clip()
 
             self.plotter.render()  # Forces the interactor to redraw the scene immediately
+
+    def _on_layer_visibility_changed(self, state: int):
+        """Handle layer visibility toggle (informational for now).
+        
+        Currently the preview always shows combined geometry (core + all shells)
+        via ComParticle. This toggle is for future enhancement to show individual
+        shell layers with different colors.
+        """
+        self.show_all_layers = bool(state)
 
     def _build_preview_scene(self):
         try:

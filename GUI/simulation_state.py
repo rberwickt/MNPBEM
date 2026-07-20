@@ -60,6 +60,10 @@ class SimulationState:
     substrate_material: Optional[str] = None
     substrate_gap: float = 0.001 # (nm)
 
+    # Core-shell multi-shell support ================================
+    core_shell_enabled: bool = False                              # Enable core-shell mode
+    shells: list[dict] = field(default_factory=list)             # List of {thickness, material, density_override} dicts
+
     sphere_n_verts: int = 256 # sphere discretization target (trisphere vertex count)
     mesh_element_size_nm: float = 5.0 # rod/cube element size in nm (smaller = finer mesh / more faces)
     refine: int = 2 # same as mesh density
@@ -179,6 +183,48 @@ class SimulationState:
         self.pol_dir_y = int(first[1])
         self.pol_dir_z = int(first[2])
 
+    def shells_to_config_dict(self) -> list[dict]:
+        """Convert shell list to backend-compatible format for YAML.
+        
+        Returns list of dicts with keys: {thickness, material, n}
+        Suitable for structure.shells field in YAML config.
+        """
+        if not self.shells or not self.core_shell_enabled:
+            return []
+        
+        out = []
+        for sh in self.shells:
+            sh_dict = {
+                'thickness': float(sh.get('thickness', 1.0)),
+                'material': str(sh.get('material', 'silver'))
+            }
+            # Add density override if specified (mesh density for this shell)
+            if sh.get('density_override') is not None:
+                sh_dict['n'] = int(sh['density_override'])
+            out.append(sh_dict)
+        return out
+
+    def config_dict_to_shells(self, shells_list: list[dict]) -> None:
+        """Populate shell list from backend YAML shells config.
+        
+        Args:
+            shells_list: List of dicts with keys {thickness, material, n} from YAML
+        """
+        self.shells = []
+        if not shells_list:
+            self.core_shell_enabled = False
+            return
+        
+        for sh_cfg in shells_list:
+            sh_dict = {
+                'thickness': float(sh_cfg.get('thickness', 1.0)),
+                'material': str(sh_cfg.get('material', 'silver')),
+                'density_override': int(sh_cfg['n']) if 'n' in sh_cfg else None
+            }
+            self.shells.append(sh_dict)
+        
+        self.core_shell_enabled = len(self.shells) > 0
+
     def _plane_wave_pairs(self) -> list[tuple[list[int], list[int]]]:
         polarizations = self.get_plane_wave_polarizations()
         propagation_dirs = self.get_plane_wave_propagation_dirs()
@@ -235,6 +281,19 @@ class SimulationState:
                         "Plane-wave polarization {} must be orthogonal to its propagation direction"
                         .format(idx)
                     )
+
+        # Validate shells if enabled
+        if self.core_shell_enabled:
+            if not self.shells or len(self.shells) == 0:
+                return False, "Core-shell mode enabled but no shells configured. Add at least one shell."
+            for i, sh in enumerate(self.shells, start = 1):
+                thickness = float(sh.get('thickness', 0))
+                if thickness <= 0:
+                    return False, "Shell {} thickness must be positive (got {})".format(i, thickness)
+                material = str(sh.get('material', ''))
+                if not material:
+                    return False, "Shell {} material not specified".format(i)
+                # Material name is resolved by backend; just check non-empty here
 
         if self.excitation_source == "Dipole":
             dipole_moment = [
@@ -349,6 +408,12 @@ class SimulationState:
             # generic
             struct_block["diameter"] = float(self.diameter)
             struct_block["mesh_density"] = float(self.mesh_element_size_nm)
+
+        # Add core-shell shells if enabled
+        if self.core_shell_enabled and self.shells:
+            shells_yaml = self.shells_to_config_dict()
+            if shells_yaml:
+                struct_block["shells"] = shells_yaml
 
         if output_dir is None:
             output_dir = str(Path(".") / "tmp")
