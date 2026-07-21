@@ -628,21 +628,25 @@ class SimulationState:
             output_path = Path(cfg["output"]["dir"]) / cfg["output"]["name"]
             ensure_dir(str(output_path))
 
-            # Pre-run sigma cache clear (GUI policy): start each run from
-            # a clean sigma cache to avoid stale-mode reuse across runs
-            # (e.g. quasistatic cache accidentally consumed by retarded
-            # field evaluation in the same output folder).
-            try:
-                from pymnpbem_simulation import sigma_cache as _sc
+            # Pre-run sigma cache policy:
+            # - Spectrum-including runs rebuild sigma, so clear first to avoid
+            #   stale-mode reuse in a reused output folder.
+            # - Field-only runs must preserve the existing sigma cache because
+            #   FieldCalculator is expected to consume it.
+            if wants_spectrum:
+                try:
+                    from pymnpbem_simulation import sigma_cache as _sc
 
-                sigma_root = Path(_sc.sigma_dir(str(output_path)))
-                if sigma_root.exists():
-                    shutil.rmtree(sigma_root, ignore_errors=True)
-                    _report(
-                        "Cleared pre-run sigma cache: {}".format(sigma_root)
-                    )
-            except Exception:
-                pass
+                    sigma_root = Path(_sc.sigma_dir(str(output_path)))
+                    if sigma_root.exists():
+                        shutil.rmtree(sigma_root, ignore_errors=True)
+                        _report(
+                            "Cleared pre-run sigma cache: {}".format(sigma_root)
+                        )
+                except Exception:
+                    pass
+            else:
+                _report("Field-only mode: preserving existing sigma cache for load/reuse")
             
             # build structure (returns p, epstab, nfaces)
             p, epstab, nfaces = build_structure(cfg["structure"], cfg.get("materials", {}))
@@ -666,11 +670,31 @@ class SimulationState:
                 cfg_dispatch["simulation"]["calculate_spectrum"] = True
                 cfg_dispatch["simulation"]["calculate_cross_sections"] = True
                 cfg_dispatch["simulation"]["calculate_fields"] = False
+                # Explicitly keep sigma I/O enabled for follow-up field pass.
+                cfg_dispatch["simulation"]["save_sigma_cache"] = True
+                cfg_dispatch["simulation"]["load_sigma_cache"] = True
             else:
                 _report("Dispatching simulation")
 
+            sim_type_dispatch = str(cfg_dispatch.get("simulation", {}).get("type", ""))
+            if "ret_layer" in sim_type_dispatch:
+                _report("RetLayer warmup started (solver init + first solve can take several minutes)")
+
             t0 = time.time()
             result = dispatch_single_node(cfg_dispatch, p, epstab, enei)
+
+            # When a spectrum pass just ran, report how much sigma became
+            # available for immediate field follow-up.
+            if wants_spectrum:
+                try:
+                    from pymnpbem_simulation import sigma_cache as _sc
+
+                    pols = cfg.get("simulation", {}).get("polarizations", [[1, 0, 0]])
+                    dirs = cfg.get("simulation", {}).get("propagation_dirs", [[0, 0, 1]] * len(pols))
+                    cached_wls = _sc.find_cached_wavelengths(str(output_path), pols, dirs)
+                    _report("Sigma cache populated: {}/{} wavelengths".format(len(cached_wls), len(enei)))
+                except Exception as _cache_exc:
+                    _report("Sigma cache count unavailable ({})".format(_cache_exc))
 
             if wants_fields and (not _has_field_payload(result)):
                 _report("Running field follow-up pass for post-processing")
@@ -681,6 +705,7 @@ class SimulationState:
                 # Keep sigma cache enabled so FieldCalculator can load the
                 # spectrum-pass sigma instead of recomputing heavy layer BEM.
                 cfg_field["simulation"]["save_sigma_cache"] = True
+                cfg_field["simulation"]["load_sigma_cache"] = True
                 field_result = dispatch_single_node(cfg_field, p, epstab, enei)
                 result = _merge_result_payload(result, field_result)
 
