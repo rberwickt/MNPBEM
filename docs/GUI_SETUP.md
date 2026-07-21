@@ -29,4 +29,8 @@ python -m GUI.gui_main
 pause
 ```
 
+## Updating the GUI
+
+Since the two dependencies are installed as editable modules, the GUI can be updated simply by pulling new changes from the GitHub repo. This can be done by running `git pull` (or `git pull origin (whatever branch)` if you need a specific branch) in each folder.
+
 ### Haven't written the guide on how to use it yet. :/
