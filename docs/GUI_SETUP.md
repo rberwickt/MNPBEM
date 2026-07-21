@@ -6,7 +6,7 @@ Start by downloading this repo (https://github.com/rberwickt/MNPBEM.git) and the
 
 ## Conda Environment Setup
 
-Create the environment using the setup file (environment.yml) by running `conda env create -f environment.yml --solver=libmamba` in the same folder using anaconda/miniconda. The solver argument fixes some issues with the packages taking a very long time to be resolved. This new environment should be called "mnpbem". Activate the environment with `conda activate mnpbem` and then navigate to where the repos from earlier are downloaded. 
+Create the environment using the setup file (GUI/mnpbem_environment.yml) by running `conda env create -f mnpbem_environment.yml --solver=libmamba` in the same folder using anaconda/miniconda. The solver argument fixes some issues with the packages taking a very long time to be resolved. This new environment should be called "mnpbem". Activate the environment with `conda activate mnpbem` and then navigate to where the repos from earlier are downloaded. 
 
 In the simulation repo, run `pip install -e .`, this will install the repo as a package with the editable tag. The editable tag allows for the package to automatically update when the folder is changed (such as by pulling from the GitHub repo).
 
