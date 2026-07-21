@@ -42,7 +42,7 @@ class RefractiveIndexWidget(QGroupBox):
 
         self.layout.addLayout(title_bar)
 
-        self.figure = None # Placeholder for the CalculationFigure
+        self.figure = None
 
         # lambda because I check the text in the case of refresh anyway
         self.material_dropdown.currentTextChanged.connect(lambda text: self.update_plot())
@@ -58,14 +58,12 @@ class RefractiveIndexWidget(QGroupBox):
             self.figure.deleteLater()
             self.figure = None
 
-        # create a new one
         selected_material = self.material_dropdown.currentText()
         if selected_material != "": 
             new_fig = self.construct_figure()
         else:
             # Create a blank figure with the exact same dimensions to hold space
             new_fig = Figure(figsize=self.FIGSIZE)
-            # Optional: Make the background transparent so it blends with the UI
             new_fig.patch.set_alpha(0.0)
 
         self.figure = CalculationFigure(new_fig)
