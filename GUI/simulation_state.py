@@ -15,10 +15,9 @@ class SimulationState:
     # UI-only: names shown in dropdowns
     loaded_dielectrics: list[str] = field(default_factory=list)
 
-    # authoritative material source for simulation
+    # material source for simulation
     material_descriptors: dict[str, dict[str, Any]] = field(default_factory=dict)
 
-    # loaded_calculations should be addresed at some point
 
     raw_results: Optional[Any] = None               # Simulation output (Sigma)
 
@@ -55,7 +54,7 @@ class SimulationState:
     # Structure and Material Settings ===================================
     structure: str = "Sphere" # shape
     use_substrate: bool = False
-    materials: list[str] = field(default_factory=list)            # particle material names (core->shell)
+    materials: list[str] = field(default_factory=list)            # particle material names
     environment_material: Optional[str] = None                    # 
     substrate_material: Optional[str] = None
     substrate_gap: float = 0.001 # (nm)
@@ -363,16 +362,20 @@ class SimulationState:
         # structure type mapping
         s_type = str(self.structure).lower()
         if "sphere" in s_type:
-            structure_type = "sphere"
+            base_shape = "sphere"
         elif "rod" in s_type:
-            structure_type = "rod"
+            base_shape = "rod"
         elif "cube" in s_type:
-            structure_type = "cube"
-        #elif "ellipsoid" in s_type:
-            #structure_type = "ellipsoid"
+            base_shape = "cube"
         else:
             # fallback: use lowercase raw value
-            structure_type = s_type
+            base_shape = s_type
+
+        is_core_shell = bool(self.core_shell_enabled and self.shells and base_shape in ("sphere", "rod", "cube"))
+        if is_core_shell:
+            structure_type = "core_shell_{}".format(base_shape)
+        else:
+            structure_type = base_shape
 
         from mnpbem.misc import EV2NM
         nm_min = float(self.energy_min)
@@ -392,16 +395,22 @@ class SimulationState:
         # build structure block
         struct_block: dict[str, Any] = {"type": structure_type, "refine": int(self.refine), "interp": self.interp}
         # shape-specific params
-        if structure_type == "sphere":
-            struct_block["diameter"] = float(self.diameter)
-            struct_block["n_verts"] = int(self.sphere_n_verts)
-        elif structure_type == "rod":
-            struct_block["diameter"] = float(self.diameter)
+        if base_shape == "sphere":
+            if is_core_shell:
+                struct_block["core_diameter"] = float(self.diameter)
+                struct_block["n_core"] = int(self.sphere_n_verts)
+            else:
+                struct_block["diameter"] = float(self.diameter)
+                struct_block["n_verts"] = int(self.sphere_n_verts)
+        elif base_shape == "rod":
+            d_key = "core_diameter" if is_core_shell else "diameter"
+            struct_block[d_key] = float(self.diameter)
             struct_block["height"] = float(self.height)
             struct_block["horizontal"] = bool(self.horizontal)
             struct_block["mesh_density"] = float(self.mesh_element_size_nm)
-        elif structure_type == "cube":
-            struct_block["size"] = float(self.size)
+        elif base_shape == "cube":
+            s_key = "core_size" if is_core_shell else "size"
+            struct_block[s_key] = float(self.size)
             struct_block["n_per_edge"] = int(self.n_per_edge)
             struct_block["mesh_density"] = float(self.mesh_element_size_nm)
         else:
@@ -486,6 +495,8 @@ class SimulationState:
             "materials": {
                 "medium": medium_name,
                 "materials": [particle_name] if particle_name is not None else [],
+                "particle": particle_name,
+                "core": particle_name,
                 "refractive_index_paths": self.material_descriptors
             },
             "compute": {

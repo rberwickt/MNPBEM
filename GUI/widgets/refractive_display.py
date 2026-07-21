@@ -13,9 +13,8 @@ from matplotlib.figure import Figure
 from .material_dropdown import MaterialComboBox
 
 
-# choose the environment and substate options
-
 class RefractiveIndexWidget(QGroupBox):
+    FIGSIZE = (4.2, 2.8)  # Width, Height in inches
     def __init__(self, state: SimulationState, parent=None):
         super().__init__("Refractive Index", parent)
         self.state = state
@@ -48,6 +47,9 @@ class RefractiveIndexWidget(QGroupBox):
         # lambda because I check the text in the case of refresh anyway
         self.material_dropdown.currentTextChanged.connect(lambda text: self.update_plot())
         self._resolved_material_cache: dict[str, tuple[str, object]] = {}
+        
+        # Initialize the layout with the plot immediately to lock in the size
+        self.update_plot()
 
     def update_plot(self):
         # clear existing plot
@@ -58,10 +60,16 @@ class RefractiveIndexWidget(QGroupBox):
 
         # create a new one
         selected_material = self.material_dropdown.currentText()
-        if selected_material != "": # default value for empty material dropdown
+        if selected_material != "": 
             new_fig = self.construct_figure()
-            self.figure = CalculationFigure(new_fig)
-            self.layout.addWidget(self.figure, 1)
+        else:
+            # Create a blank figure with the exact same dimensions to hold space
+            new_fig = Figure(figsize=self.FIGSIZE)
+            # Optional: Make the background transparent so it blends with the UI
+            new_fig.patch.set_alpha(0.0)
+
+        self.figure = CalculationFigure(new_fig)
+        self.layout.addWidget(self.figure, 1)
 
     def construct_figure(self) -> Figure:
         selected_material = self.material_dropdown.currentText()
@@ -76,7 +84,7 @@ class RefractiveIndexWidget(QGroupBox):
         real, imag = self._get_eps_components(selected_material, wavelengths)
 
         # figure building
-        fig = Figure(figsize = (4.2, 2.8))
+        fig = Figure(figsize=self.FIGSIZE)
         ax = fig.add_subplot(111)
         if self.eps_select.currentText() == "Real":
             ax.plot(wavelengths, real, label="Eps1 (Real)")

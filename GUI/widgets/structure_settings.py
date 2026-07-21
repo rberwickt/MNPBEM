@@ -326,6 +326,15 @@ class ShellRowWidget(QWidget):
         
         # Material dropdown
         self.mat_combo = MaterialComboBox(self.state)
+        mat_name = str(shell.get('material', ''))
+        if mat_name:
+            idx = self.mat_combo.findText(mat_name)
+            if idx >= 0:
+                self.mat_combo.setCurrentIndex(idx)
+            else:
+                # Keep state-visible material even if not in loaded list yet.
+                self.mat_combo.addItem(mat_name)
+                self.mat_combo.setCurrentText(mat_name)
         self.mat_combo.setMaximumHeight(26)
         self.mat_combo.currentTextChanged.connect(lambda mat: self.material_changed.emit(mat))
         layout.addWidget(self.mat_combo, 1)
