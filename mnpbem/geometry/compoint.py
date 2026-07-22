@@ -465,10 +465,11 @@ class ComPoint(object):
         # result to a python scalar. Normalize to at least 1-D so the
         # point-to-grid remap logic stays shape-safe.
         if valpt.ndim == 0:
+            if self.n != 1:
+                raise ValueError(
+                        'ComPoint.__call__: scalar valpt but n_active_points={} '.format(self.n)
+                        + '(expected 1)')
             valpt = valpt.reshape(1)
-
-        if valpt.shape[0] == 1 and self.n > 1:
-            valpt = np.repeat(valpt, self.n, axis = 0)
 
         siz = valpt.shape
         dtype = valpt.dtype if hasattr(valpt, 'dtype') else np.float64
