@@ -319,6 +319,26 @@ def _add_safe(a, b):
     return a + b
 
 
+def _infer_structured_n1(G):
+    """Infer target-point count n1 from a structured Green dict."""
+    if isinstance(G, dict):
+        for key in ('p', 'hh', 'hs', 'ss', 'sh'):
+            val = G.get(key, None)
+            if isinstance(val, np.ndarray) and val.ndim >= 2:
+                return int(val.shape[0])
+    return None
+
+
+def _zero_field_like(G, h):
+    """Return a zero vector field shaped as (n1, 3[, n_pol])."""
+    n1 = _infer_structured_n1(G)
+    if n1 is None:
+        return 0
+
+    tail = tuple(h.shape[2:]) if isinstance(h, np.ndarray) and h.ndim > 2 else tuple()
+    return np.zeros((n1, 3) + tail, dtype = complex)
+
+
 def _matmul(A, x):
     # Generalized matrix multiply handling scalar/zero, 2D, and 3D cases
     if isinstance(A, (int, float)):
@@ -406,7 +426,7 @@ def _matmul2_h(G, sig_charge, h):
             break
 
     if ref is None:
-        return 0
+        return _zero_field_like(G, h)
 
     # empty + slice assignment (no np.concatenate / np.stack)
     out_shape = (ref.shape[0], 3) + ref.shape[1:]
@@ -483,7 +503,8 @@ def _cross3(G, sig, name):
             break
 
     if ref is None:
-        return 0
+        h_ref = getattr(sig, name)
+        return _zero_field_like(G, h_ref)
 
     result_parts = []
     for part in parts:
@@ -799,6 +820,17 @@ class CompGreenRetLayer(object):
         h = _add_safe(
             _cross3(H1p, sig, 'h1'),
             _cross3(H2p, sig, 'h2'))
+
+        # Fail fast on scalar collapse: this indicates an upstream Green
+        # function assembly mismatch and should be diagnosed, not masked.
+        if np.isscalar(e) or np.asarray(e).ndim == 0:
+            raise RuntimeError(
+                    'CompGreenRetLayer.field produced scalar E at enei={} '.format(enei)
+                    + '(inout={}, p1.n={})'.format(inout, self.p1.n))
+        if np.isscalar(h) or np.asarray(h).ndim == 0:
+            raise RuntimeError(
+                    'CompGreenRetLayer.field produced scalar H at enei={} '.format(enei)
+                    + '(inout={}, p1.n={})'.format(inout, self.p1.n))
 
         return CompStruct(self.p1, enei, e = e, h = h)
 
