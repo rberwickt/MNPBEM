@@ -460,6 +460,16 @@ class ComPoint(object):
     def __call__(self,
             valpt: np.ndarray,
             valdef: float = float('nan')) -> np.ndarray:
+        valpt = np.asarray(valpt)
+        # Some Green-function paths may collapse a single-point/single-pol
+        # result to a python scalar. Normalize to at least 1-D so the
+        # point-to-grid remap logic stays shape-safe.
+        if valpt.ndim == 0:
+            valpt = valpt.reshape(1)
+
+        if valpt.shape[0] == 1 and self.n > 1:
+            valpt = np.repeat(valpt, self.n, axis = 0)
+
         siz = valpt.shape
         dtype = valpt.dtype if hasattr(valpt, 'dtype') else np.float64
         if np.isnan(valdef):
