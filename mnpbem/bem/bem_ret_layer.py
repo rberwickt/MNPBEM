@@ -131,6 +131,55 @@ def _lu_factor_checked(A: Any,
                         float(st.get('row_norm_max', float('nan')))))
 
 
+def _absmax_safe(A: Any) -> float:
+    """Return max(abs(A)) with robust host coercion; NaN on failure."""
+    try:
+        Ah = to_host(A)
+    except Exception:
+        Ah = A
+    try:
+        M = np.asarray(Ah)
+        if M.size == 0:
+            return 0.0
+        return float(np.max(np.abs(M)))
+    except Exception:
+        return float('nan')
+
+
+def _nnz_safe(A: Any) -> int:
+    """Return nonzero count for diagnostic summaries."""
+    try:
+        Ah = to_host(A)
+    except Exception:
+        Ah = A
+    try:
+        return int(np.count_nonzero(np.asarray(Ah)))
+    except Exception:
+        return -1
+
+
+def _summarize_connectivity(con: Any) -> str:
+    """Compact summary for one connectivity block (region pair)."""
+    try:
+        C = np.asarray(con)
+    except Exception:
+        return 'unavailable'
+
+    if C.size == 0:
+        return 'empty'
+
+    try:
+        nnz = int(np.count_nonzero(C))
+        total = int(C.size)
+        uniq = np.unique(C[C != 0])
+        uniq_s = ','.join(str(int(v)) for v in uniq[:8])
+        if uniq.size > 8:
+            uniq_s += ',...'
+        return 'nnz={}/{} unique_nonzero=[{}]'.format(nnz, total, uniq_s)
+    except Exception:
+        return 'shape={}'.format(getattr(C, 'shape', '?'))
+
+
 def _assemble_m_blocks_resident(
         L1, L2p, Sigma1, Sigma1e, Gamma,
         G2, G2e, H2, H2e,
@@ -645,6 +694,46 @@ class BEMRetLayer(object):
         G1e = self._sub_mat(self._mul_eps(eps1, G11), self._mul_eps(eps2, G21))
         H1 = self._sub_mat(H11, H21)
         H1e = self._sub_mat(self._mul_eps(eps1, H11), self._mul_eps(eps2, H21))
+
+        # Fail fast with direct assembly diagnostics before LU. If G1 is an
+        # all-zero matrix, the issue is almost always invalid region/material
+        # connectivity (inout mapping), not numerical conditioning.
+        g1_absmax = _absmax_safe(G1)
+        if np.isfinite(g1_absmax) and g1_absmax == 0.0:
+            io = np.asarray(getattr(self.p, 'inout', np.array([])))
+            io_shape = tuple(io.shape) if hasattr(io, 'shape') else '?'
+            io_head = io[:min(8, io.shape[0])].tolist() if isinstance(io, np.ndarray) and io.ndim >= 2 else 'n/a'
+            io_cols_equal = False
+            if isinstance(io, np.ndarray) and io.ndim == 2 and io.shape[1] >= 2:
+                io_cols_equal = bool(np.array_equal(io[:, 0], io[:, 1]))
+
+            con00_s = 'unavailable'
+            con10_s = 'unavailable'
+            try:
+                con = getattr(getattr(self.g, 'g', None), 'con', None)
+                if con is not None and len(con) > 0 and len(con[0]) > 0:
+                    con00_s = _summarize_connectivity(con[0][0])
+                if con is not None and len(con) > 1 and len(con[1]) > 0:
+                    con10_s = _summarize_connectivity(con[1][0])
+            except Exception:
+                pass
+
+            raise RuntimeError(
+                    'BEMRetLayer assembled zero G1 at {:.2f} nm before LU. '
+                    'Direct-block norms: |G11|max={:.3e} (nnz={}), '
+                    '|G21|max={:.3e} (nnz={}), |H11|max={:.3e}, |H21|max={:.3e}. '
+                    'Connectivity: con[0,0]=({}), con[1,0]=({}). '
+                    'p.inout shape={} cols_equal={} head={}. '
+                    'Likely cause: invalid inside/outside region mapping '
+                    '(e.g., swapped/degenerate inout), which makes G11 and G21 '
+                    'cancel or both vanish.'.format(
+                            float(enei),
+                            _absmax_safe(G11), _nnz_safe(G11),
+                            _absmax_safe(G21), _nnz_safe(G21),
+                            _absmax_safe(H11), _absmax_safe(H21),
+                            con00_s, con10_s,
+                            io_shape, io_cols_equal, io_head))
+
         # MNPBEM_GPU_LOWPREC: cast the inner-surface BEM blocks to complex64
         # so downstream LU/matmul/Sigma stages operate at half memory.
         if _lowprec:
@@ -1667,6 +1756,43 @@ class BEMRetLayer(object):
         G1e = self._sub_mat(self._mul_eps(eps1, G11), self._mul_eps(eps2, G21))
         H1 = self._sub_mat(H11, H21)
         H1e = self._sub_mat(self._mul_eps(eps1, H11), self._mul_eps(eps2, H21))
+
+        g1_absmax = _absmax_safe(G1)
+        if np.isfinite(g1_absmax) and g1_absmax == 0.0:
+            io = np.asarray(getattr(self.p, 'inout', np.array([])))
+            io_shape = tuple(io.shape) if hasattr(io, 'shape') else '?'
+            io_head = io[:min(8, io.shape[0])].tolist() if isinstance(io, np.ndarray) and io.ndim >= 2 else 'n/a'
+            io_cols_equal = False
+            if isinstance(io, np.ndarray) and io.ndim == 2 and io.shape[1] >= 2:
+                io_cols_equal = bool(np.array_equal(io[:, 0], io[:, 1]))
+
+            con00_s = 'unavailable'
+            con10_s = 'unavailable'
+            try:
+                con = getattr(getattr(self.g, 'g', None), 'con', None)
+                if con is not None and len(con) > 0 and len(con[0]) > 0:
+                    con00_s = _summarize_connectivity(con[0][0])
+                if con is not None and len(con) > 1 and len(con[1]) > 0:
+                    con10_s = _summarize_connectivity(con[1][0])
+            except Exception:
+                pass
+
+            raise RuntimeError(
+                    'BEMRetLayer assembled zero G1 at {:.2f} nm before LU. '
+                    'Direct-block norms: |G11|max={:.3e} (nnz={}), '
+                    '|G21|max={:.3e} (nnz={}), |H11|max={:.3e}, |H21|max={:.3e}. '
+                    'Connectivity: con[0,0]=({}), con[1,0]=({}). '
+                    'p.inout shape={} cols_equal={} head={}. '
+                    'Likely cause: invalid inside/outside region mapping '
+                    '(e.g., swapped/degenerate inout), which makes G11 and G21 '
+                    'cancel or both vanish.'.format(
+                            float(enei),
+                            _absmax_safe(G11), _nnz_safe(G11),
+                            _absmax_safe(G21), _nnz_safe(G21),
+                            _absmax_safe(H11), _absmax_safe(H21),
+                            con00_s, con10_s,
+                            io_shape, io_cols_equal, io_head))
+
         del G11, G21, H11, H21
         try:
             cp.cuda.runtime.deviceSynchronize()
