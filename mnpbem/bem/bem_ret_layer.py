@@ -71,115 +71,6 @@ def _prof_mark(label, t_prev, store=None):
     return now
 
 
-def _lu_failure_stats(A: Any) -> Dict[str, Any]:
-    """Return compact matrix-health stats for LU failure diagnostics."""
-    try:
-        Ah = to_host(A)
-    except Exception:
-        Ah = A
-
-    try:
-        M = np.asarray(Ah)
-    except Exception:
-        return {'shape': str(getattr(A, 'shape', '?')), 'coerce_error': True}
-
-    out: Dict[str, Any] = {
-            'shape': tuple(M.shape),
-            'finite': bool(np.all(np.isfinite(M))) if M.size > 0 else True,
-            'dtype': str(M.dtype)}
-
-    if M.ndim == 2 and M.size > 0:
-        try:
-            d = np.abs(np.diag(M))
-            out['diag_min'] = float(np.min(d)) if d.size > 0 else 0.0
-            out['diag_max'] = float(np.max(d)) if d.size > 0 else 0.0
-        except Exception:
-            out['diag_min'] = float('nan')
-            out['diag_max'] = float('nan')
-
-        try:
-            rn = np.linalg.norm(M, axis = 1)
-            out['zero_rows'] = int(np.sum(rn == 0))
-            out['row_norm_min'] = float(np.min(rn))
-            out['row_norm_max'] = float(np.max(rn))
-        except Exception:
-            out['zero_rows'] = -1
-            out['row_norm_min'] = float('nan')
-            out['row_norm_max'] = float('nan')
-
-    return out
-
-
-def _lu_factor_checked(A: Any,
-        name: str,
-        wl_nm: float) -> Any:
-    """LU factorization with actionable diagnostics on failure."""
-    try:
-        return lu_factor_dispatch(A, **_vram_share_lu_kwargs())
-    except Exception as e:
-        st = _lu_failure_stats(A)
-        raise RuntimeError(
-                'BEMRetLayer LU failed for {} at {:.2f} nm: {} | '
-                'shape={} finite={} diag_min={:.3e} diag_max={:.3e} '
-                'zero_rows={} row_norm_min={:.3e} row_norm_max={:.3e}'.format(
-                        name, float(wl_nm), e,
-                        st.get('shape', '?'), st.get('finite', '?'),
-                        float(st.get('diag_min', float('nan'))),
-                        float(st.get('diag_max', float('nan'))),
-                        int(st.get('zero_rows', -1)),
-                        float(st.get('row_norm_min', float('nan'))),
-                        float(st.get('row_norm_max', float('nan')))))
-
-
-def _absmax_safe(A: Any) -> float:
-    """Return max(abs(A)) with robust host coercion; NaN on failure."""
-    try:
-        Ah = to_host(A)
-    except Exception:
-        Ah = A
-    try:
-        M = np.asarray(Ah)
-        if M.size == 0:
-            return 0.0
-        return float(np.max(np.abs(M)))
-    except Exception:
-        return float('nan')
-
-
-def _nnz_safe(A: Any) -> int:
-    """Return nonzero count for diagnostic summaries."""
-    try:
-        Ah = to_host(A)
-    except Exception:
-        Ah = A
-    try:
-        return int(np.count_nonzero(np.asarray(Ah)))
-    except Exception:
-        return -1
-
-
-def _summarize_connectivity(con: Any) -> str:
-    """Compact summary for one connectivity block (region pair)."""
-    try:
-        C = np.asarray(con)
-    except Exception:
-        return 'unavailable'
-
-    if C.size == 0:
-        return 'empty'
-
-    try:
-        nnz = int(np.count_nonzero(C))
-        total = int(C.size)
-        uniq = np.unique(C[C != 0])
-        uniq_s = ','.join(str(int(v)) for v in uniq[:8])
-        if uniq.size > 8:
-            uniq_s += ',...'
-        return 'nnz={}/{} unique_nonzero=[{}]'.format(nnz, total, uniq_s)
-    except Exception:
-        return 'shape={}'.format(getattr(C, 'shape', '?'))
-
-
 def _assemble_m_blocks_resident(
         L1, L2p, Sigma1, Sigma1e, Gamma,
         G2, G2e, H2, H2e,
@@ -694,46 +585,6 @@ class BEMRetLayer(object):
         G1e = self._sub_mat(self._mul_eps(eps1, G11), self._mul_eps(eps2, G21))
         H1 = self._sub_mat(H11, H21)
         H1e = self._sub_mat(self._mul_eps(eps1, H11), self._mul_eps(eps2, H21))
-
-        # Fail fast with direct assembly diagnostics before LU. If G1 is an
-        # all-zero matrix, the issue is almost always invalid region/material
-        # connectivity (inout mapping), not numerical conditioning.
-        g1_absmax = _absmax_safe(G1)
-        if np.isfinite(g1_absmax) and g1_absmax == 0.0:
-            io = np.asarray(getattr(self.p, 'inout', np.array([])))
-            io_shape = tuple(io.shape) if hasattr(io, 'shape') else '?'
-            io_head = io[:min(8, io.shape[0])].tolist() if isinstance(io, np.ndarray) and io.ndim >= 2 else 'n/a'
-            io_cols_equal = False
-            if isinstance(io, np.ndarray) and io.ndim == 2 and io.shape[1] >= 2:
-                io_cols_equal = bool(np.array_equal(io[:, 0], io[:, 1]))
-
-            con00_s = 'unavailable'
-            con10_s = 'unavailable'
-            try:
-                con = getattr(getattr(self.g, 'g', None), 'con', None)
-                if con is not None and len(con) > 0 and len(con[0]) > 0:
-                    con00_s = _summarize_connectivity(con[0][0])
-                if con is not None and len(con) > 1 and len(con[1]) > 0:
-                    con10_s = _summarize_connectivity(con[1][0])
-            except Exception:
-                pass
-
-            raise RuntimeError(
-                    'BEMRetLayer assembled zero G1 at {:.2f} nm before LU. '
-                    'Direct-block norms: |G11|max={:.3e} (nnz={}), '
-                    '|G21|max={:.3e} (nnz={}), |H11|max={:.3e}, |H21|max={:.3e}. '
-                    'Connectivity: con[0,0]=({}), con[1,0]=({}). '
-                    'p.inout shape={} cols_equal={} head={}. '
-                    'Likely cause: invalid inside/outside region mapping '
-                    '(e.g., swapped/degenerate inout), which makes G11 and G21 '
-                    'cancel or both vanish.'.format(
-                            float(enei),
-                            _absmax_safe(G11), _nnz_safe(G11),
-                            _absmax_safe(G21), _nnz_safe(G21),
-                            _absmax_safe(H11), _absmax_safe(H21),
-                            con00_s, con10_s,
-                            io_shape, io_cols_equal, io_head))
-
         # MNPBEM_GPU_LOWPREC: cast the inner-surface BEM blocks to complex64
         # so downstream LU/matmul/Sigma stages operate at half memory.
         if _lowprec:
@@ -843,10 +694,10 @@ class BEMRetLayer(object):
         else:
             # ---- Auxiliary matrices (MATLAB initmat.m lines 51-68) ----
             # Inverse of G1 and of parallel component G2.p
-            self._G1_lu = _lu_factor_checked(G1, 'G1', enei)
+            self._G1_lu = lu_factor_dispatch(G1, **_vram_share_lu_kwargs())
             G1i = lu_solve_dispatch(self._G1_lu, np.eye(G1.shape[0], dtype=_wd))
 
-            self._G2p_lu = _lu_factor_checked(G2['p'], 'G2.p', enei)
+            self._G2p_lu = lu_factor_dispatch(G2['p'], **_vram_share_lu_kwargs())
             G2pi = lu_solve_dispatch(self._G2p_lu, np.eye(G2['p'].shape[0], dtype=_wd))
             # v1.7.2: free pools after the two G LU factorizations + their
             # inverses (each LU is ~N^2 complex; the eye-product N^2 too).
@@ -877,7 +728,7 @@ class BEMRetLayer(object):
                     pass
 
             # Gamma matrix
-            self._Gamma_lu = _lu_factor_checked(Sigma1 - Sigma2p, 'Sigma1-Sigma2p', enei)
+            self._Gamma_lu = lu_factor_dispatch(Sigma1 - Sigma2p, **_vram_share_lu_kwargs())
             Gamma = lu_solve_dispatch(self._Gamma_lu, np.eye(Sigma1.shape[0], dtype=_wd))
             del Sigma2p
             if _CUPY_OK_V172:
@@ -1756,43 +1607,6 @@ class BEMRetLayer(object):
         G1e = self._sub_mat(self._mul_eps(eps1, G11), self._mul_eps(eps2, G21))
         H1 = self._sub_mat(H11, H21)
         H1e = self._sub_mat(self._mul_eps(eps1, H11), self._mul_eps(eps2, H21))
-
-        g1_absmax = _absmax_safe(G1)
-        if np.isfinite(g1_absmax) and g1_absmax == 0.0:
-            io = np.asarray(getattr(self.p, 'inout', np.array([])))
-            io_shape = tuple(io.shape) if hasattr(io, 'shape') else '?'
-            io_head = io[:min(8, io.shape[0])].tolist() if isinstance(io, np.ndarray) and io.ndim >= 2 else 'n/a'
-            io_cols_equal = False
-            if isinstance(io, np.ndarray) and io.ndim == 2 and io.shape[1] >= 2:
-                io_cols_equal = bool(np.array_equal(io[:, 0], io[:, 1]))
-
-            con00_s = 'unavailable'
-            con10_s = 'unavailable'
-            try:
-                con = getattr(getattr(self.g, 'g', None), 'con', None)
-                if con is not None and len(con) > 0 and len(con[0]) > 0:
-                    con00_s = _summarize_connectivity(con[0][0])
-                if con is not None and len(con) > 1 and len(con[1]) > 0:
-                    con10_s = _summarize_connectivity(con[1][0])
-            except Exception:
-                pass
-
-            raise RuntimeError(
-                    'BEMRetLayer assembled zero G1 at {:.2f} nm before LU. '
-                    'Direct-block norms: |G11|max={:.3e} (nnz={}), '
-                    '|G21|max={:.3e} (nnz={}), |H11|max={:.3e}, |H21|max={:.3e}. '
-                    'Connectivity: con[0,0]=({}), con[1,0]=({}). '
-                    'p.inout shape={} cols_equal={} head={}. '
-                    'Likely cause: invalid inside/outside region mapping '
-                    '(e.g., swapped/degenerate inout), which makes G11 and G21 '
-                    'cancel or both vanish.'.format(
-                            float(enei),
-                            _absmax_safe(G11), _nnz_safe(G11),
-                            _absmax_safe(G21), _nnz_safe(G21),
-                            _absmax_safe(H11), _absmax_safe(H21),
-                            con00_s, con10_s,
-                            io_shape, io_cols_equal, io_head))
-
         del G11, G21, H11, H21
         try:
             cp.cuda.runtime.deviceSynchronize()
