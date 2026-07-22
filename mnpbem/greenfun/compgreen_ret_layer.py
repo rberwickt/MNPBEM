@@ -319,6 +319,23 @@ def _add_safe(a, b):
     return a + b
 
 
+def _is_zero_scalar_like(val: Any) -> bool:
+    """True for scalar/0-d/size-1 numeric values equal to zero."""
+    if np.isscalar(val):
+        try:
+            return complex(val) == 0
+        except Exception:
+            return False
+
+    if isinstance(val, np.ndarray) and val.size == 1:
+        try:
+            return complex(np.asarray(val).reshape(1)[0]) == 0
+        except Exception:
+            return False
+
+    return False
+
+
 def _infer_structured_n1(G):
     """Infer target-point count n1 from a structured Green dict."""
     if isinstance(G, dict):
@@ -621,8 +638,21 @@ class CompGreenRetLayer(object):
         # Get direct Green function
         g_direct = self.g.eval(i, j, key, enei, ind = ind)
 
-        # Make sure g_direct is not zero (MATLAB eval1.m lines 23-30)
-        if isinstance(g_direct, (int, float)) and g_direct == 0:
+        # Make sure g_direct is not scalar-like zero  PREV WAS not zero -> (MATLAB eval1.m lines 23-30)
+        if _is_zero_scalar_like(g_direct):
+            if key in ('Gp', 'H1p', 'H2p'):
+                g_direct = np.zeros((self.p1.n, 3, self.p2.n), dtype = complex)
+            else:
+                g_direct = np.zeros((self.p1.n, self.p2.n), dtype = complex)
+
+        # Some sparse/empty block paths can return scalar-like nonzero/zero
+        # containers; force shape-stable ndarray output for downstream matmul.
+        if not isinstance(g_direct, np.ndarray):
+            if key in ('Gp', 'H1p', 'H2p'):
+                g_direct = np.zeros((self.p1.n, 3, self.p2.n), dtype = complex)
+            else:
+                g_direct = np.zeros((self.p1.n, self.p2.n), dtype = complex)
+        elif g_direct.ndim == 0:
             if key in ('Gp', 'H1p', 'H2p'):
                 g_direct = np.zeros((self.p1.n, 3, self.p2.n), dtype = complex)
             else:
@@ -681,6 +711,16 @@ class CompGreenRetLayer(object):
         from ..utils.gpu import to_host as _to_host_arr
 
         g_direct_host = _to_host_arr(g_direct) if not isinstance(g_direct, np.ndarray) else g_direct
+
+        if not isinstance(g_direct_host, np.ndarray) or g_direct_host.ndim == 0:
+            # Keep assembly shape-stable even when upstream returns an
+            # empty/sentinel scalar.
+            sample = next(iter(gr_comp.values()))
+            sample_arr = _to_host_arr(sample)
+            if isinstance(sample_arr, np.ndarray) and sample_arr.ndim == 3:
+                g_direct_host = np.zeros((n_p1, 3, n_p2), dtype = complex)
+            else:
+                g_direct_host = np.zeros((n_p1, n_p2), dtype = complex)
 
         for name in gr_comp:
             if name in ('ss', 'hh', 'p'):
