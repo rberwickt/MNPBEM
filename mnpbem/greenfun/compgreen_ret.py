@@ -1581,6 +1581,7 @@ class GreenRetBlock(object):
         self.i2_end = i2_end
         self.g_full = g_full
         self.deriv = deriv
+        self._refined_zero_warned = set()
 
         # Initialize refinement for this particle pair
         self.refined = None
@@ -1628,9 +1629,37 @@ class GreenRetBlock(object):
             column-tile build.  None (default) preserves backward
             compatibility — the full block is returned.
         """
-        # Use refined Green function if available
+        # Use refined Green function when available, but guard against a
+        # pathological all-zero refined block (seen in some layer/curv paths)
+        # that can collapse downstream BEM matrices (G1 == 0). In that case
+        # fall back to the analytic non-refined block path below.
         if self.refined is not None:
-            return self.refined.eval(k, key, col_range = col_range)
+            refined_out = self.refined.eval(k, key, col_range = col_range)
+            use_refined = True
+
+            try:
+                if np.isscalar(refined_out):
+                    use_refined = (refined_out != 0)
+                elif isinstance(refined_out, np.ndarray) and refined_out.size > 0:
+                    # All-zero refined block is non-physical for non-empty faces.
+                    if np.count_nonzero(refined_out) == 0:
+                        use_refined = False
+            except Exception:
+                # If the health check itself fails, keep refined behavior.
+                use_refined = True
+
+            if use_refined:
+                return refined_out
+
+            warn_tag = (str(key), bool(col_range is not None))
+            if warn_tag not in self._refined_zero_warned:
+                self._refined_zero_warned.add(warn_tag)
+                try:
+                    print('[warn] GreenRetBlock refined {}-path returned all-zero block; '
+                          'fallback to analytic block eval (k={}, n1={}, n2={})'.format(
+                              key, k, self.p1.n, self.p2.n), flush = True)
+                except Exception:
+                    pass
 
         # Fallback to simple approximation (if refinement not initialized)
         # Compute Green function matrices
