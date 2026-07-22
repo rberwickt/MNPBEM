@@ -22,6 +22,7 @@ class MainController(QMainWindow):
         
         
         self.resize(800, 700)
+        self.showFullScreen()
 
         self.stacked_widget = QStackedWidget()
         self.setCentralWidget(self.stacked_widget)
