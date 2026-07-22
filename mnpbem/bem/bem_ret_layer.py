@@ -71,6 +71,66 @@ def _prof_mark(label, t_prev, store=None):
     return now
 
 
+def _lu_failure_stats(A: Any) -> Dict[str, Any]:
+    """Return compact matrix-health stats for LU failure diagnostics."""
+    try:
+        Ah = to_host(A)
+    except Exception:
+        Ah = A
+
+    try:
+        M = np.asarray(Ah)
+    except Exception:
+        return {'shape': str(getattr(A, 'shape', '?')), 'coerce_error': True}
+
+    out: Dict[str, Any] = {
+            'shape': tuple(M.shape),
+            'finite': bool(np.all(np.isfinite(M))) if M.size > 0 else True,
+            'dtype': str(M.dtype)}
+
+    if M.ndim == 2 and M.size > 0:
+        try:
+            d = np.abs(np.diag(M))
+            out['diag_min'] = float(np.min(d)) if d.size > 0 else 0.0
+            out['diag_max'] = float(np.max(d)) if d.size > 0 else 0.0
+        except Exception:
+            out['diag_min'] = float('nan')
+            out['diag_max'] = float('nan')
+
+        try:
+            rn = np.linalg.norm(M, axis = 1)
+            out['zero_rows'] = int(np.sum(rn == 0))
+            out['row_norm_min'] = float(np.min(rn))
+            out['row_norm_max'] = float(np.max(rn))
+        except Exception:
+            out['zero_rows'] = -1
+            out['row_norm_min'] = float('nan')
+            out['row_norm_max'] = float('nan')
+
+    return out
+
+
+def _lu_factor_checked(A: Any,
+        name: str,
+        wl_nm: float) -> Any:
+    """LU factorization with actionable diagnostics on failure."""
+    try:
+        return lu_factor_dispatch(A, **_vram_share_lu_kwargs())
+    except Exception as e:
+        st = _lu_failure_stats(A)
+        raise RuntimeError(
+                'BEMRetLayer LU failed for {} at {:.2f} nm: {} | '
+                'shape={} finite={} diag_min={:.3e} diag_max={:.3e} '
+                'zero_rows={} row_norm_min={:.3e} row_norm_max={:.3e}'.format(
+                        name, float(wl_nm), e,
+                        st.get('shape', '?'), st.get('finite', '?'),
+                        float(st.get('diag_min', float('nan'))),
+                        float(st.get('diag_max', float('nan'))),
+                        int(st.get('zero_rows', -1)),
+                        float(st.get('row_norm_min', float('nan'))),
+                        float(st.get('row_norm_max', float('nan')))))
+
+
 def _assemble_m_blocks_resident(
         L1, L2p, Sigma1, Sigma1e, Gamma,
         G2, G2e, H2, H2e,
@@ -694,10 +754,10 @@ class BEMRetLayer(object):
         else:
             # ---- Auxiliary matrices (MATLAB initmat.m lines 51-68) ----
             # Inverse of G1 and of parallel component G2.p
-            self._G1_lu = lu_factor_dispatch(G1, **_vram_share_lu_kwargs())
+            self._G1_lu = _lu_factor_checked(G1, 'G1', enei)
             G1i = lu_solve_dispatch(self._G1_lu, np.eye(G1.shape[0], dtype=_wd))
 
-            self._G2p_lu = lu_factor_dispatch(G2['p'], **_vram_share_lu_kwargs())
+            self._G2p_lu = _lu_factor_checked(G2['p'], 'G2.p', enei)
             G2pi = lu_solve_dispatch(self._G2p_lu, np.eye(G2['p'].shape[0], dtype=_wd))
             # v1.7.2: free pools after the two G LU factorizations + their
             # inverses (each LU is ~N^2 complex; the eye-product N^2 too).
@@ -728,7 +788,7 @@ class BEMRetLayer(object):
                     pass
 
             # Gamma matrix
-            self._Gamma_lu = lu_factor_dispatch(Sigma1 - Sigma2p, **_vram_share_lu_kwargs())
+            self._Gamma_lu = _lu_factor_checked(Sigma1 - Sigma2p, 'Sigma1-Sigma2p', enei)
             Gamma = lu_solve_dispatch(self._Gamma_lu, np.eye(Sigma1.shape[0], dtype=_wd))
             del Sigma2p
             if _CUPY_OK_V172:
