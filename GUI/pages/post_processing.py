@@ -53,6 +53,7 @@ class ProcessingPage(QWidget):
         self._btn_spec_save_raw = None
         self._btn_spec_save_raw_all = None
         self._spec_pol_selector = None
+        self._spec_quantity_selector = None
         self._btn_field_run = None
         self._btn_field_save_processed = None
         self._btn_field_save_raw = None
@@ -96,6 +97,13 @@ class ProcessingPage(QWidget):
         self._spec_pol_selector.setEnabled(False)
         self._spec_pol_selector.currentIndexChanged.connect(self._on_spectrum_selector_changed)
 
+        self._spec_quantity_selector = QComboBox()
+        self._spec_quantity_selector.addItem("All", userData = "all")
+        self._spec_quantity_selector.addItem("Extinction", userData = "ext")
+        self._spec_quantity_selector.addItem("Absorption", userData = "abs")
+        self._spec_quantity_selector.addItem("Scattering", userData = "sca")
+        self._spec_quantity_selector.currentIndexChanged.connect(self._on_spectrum_selector_changed)
+
         self._btn_spec_run.clicked.connect(self._run_spectrum_analysis)
         self._btn_spec_save_processed.clicked.connect(
             lambda _checked = False: self._save_processed_output("spectrum"))
@@ -108,8 +116,10 @@ class ProcessingPage(QWidget):
         action_row.addWidget(self._btn_spec_save_processed)
         action_row.addWidget(self._btn_spec_save_raw)
         action_row.addWidget(self._btn_spec_save_raw_all)
-        action_row.addWidget(QLabel("View:"))
+        action_row.addWidget(QLabel("Pol:"))
         action_row.addWidget(self._spec_pol_selector)
+        action_row.addWidget(QLabel("Quantity:"))
+        action_row.addWidget(self._spec_quantity_selector)
         action_row.addStretch(1)
         layout.addLayout(action_row)
 
@@ -411,7 +421,11 @@ class ProcessingPage(QWidget):
             summary = analyze_spectrum(raw)
             self.processed_outputs["spectrum"] = summary
 
-            fig = self._build_spectrum_figure(raw, pol_idx = self._selected_spectrum_pol())
+            fig = self._build_spectrum_figure(
+                raw,
+                pol_idx = self._selected_spectrum_pol(),
+                quantity = self._selected_spectrum_quantity(),
+            )
             self._spectrum_summary_label.setText(self._format_spectrum_summary(summary))
             self._set_result_figure("spectrum", fig)
         except Exception as exc:
@@ -422,7 +436,11 @@ class ProcessingPage(QWidget):
         if raw is None or not self._has_spectrum_data(raw):
             return
         try:
-            fig = self._build_spectrum_figure(raw, pol_idx = self._selected_spectrum_pol())
+            fig = self._build_spectrum_figure(
+                raw,
+                pol_idx = self._selected_spectrum_pol(),
+                quantity = self._selected_spectrum_quantity(),
+            )
             self._set_result_figure("spectrum", fig)
         except Exception:
             # Keep UI responsive even if selection redraw fails.
@@ -529,7 +547,7 @@ class ProcessingPage(QWidget):
 
     
 
-    def _build_spectrum_figure(self, raw: dict, pol_idx: int = -1) -> Figure:
+    def _build_spectrum_figure(self, raw: dict, pol_idx: int = -1, quantity: str = "all") -> Figure:
         wl = np.asarray(raw["wavelength"])
         ext = np.asarray(raw["ext"])
         sca = np.asarray(raw["sca"])
@@ -540,6 +558,17 @@ class ProcessingPage(QWidget):
 
         n_pol = ext.shape[1]
         show_all = (pol_idx < 0) or (pol_idx >= n_pol)
+        quantity_key = str(quantity).strip().lower()
+        if quantity_key not in ("all", "ext", "abs", "sca"):
+            quantity_key = "all"
+
+        def plot_components(x_vals, ext_vals, sca_vals, abs_vals, label_suffix: str):
+            if quantity_key in ("all", "ext"):
+                ax.plot(x_vals, ext_vals, label = "ext {}".format(label_suffix))
+            if quantity_key in ("all", "sca"):
+                ax.plot(x_vals, sca_vals, linestyle = "--", label = "sca {}".format(label_suffix))
+            if quantity_key in ("all", "abs"):
+                ax.plot(x_vals, abs_vals, linestyle = ":", label = "abs {}".format(label_suffix))
 
         # When showing all polarizations with many pols, only show averages to avoid legend explosion
         max_individual_pols_to_plot = 3
@@ -548,72 +577,85 @@ class ProcessingPage(QWidget):
         if show_individual:
             # Show individual polarizations for small n_pol
             for i in range(n_pol):
-                ax.plot(wl, ext[:, i], label = "ext pol {}".format(i))
-                ax.plot(wl, sca[:, i], linestyle = "--", label = "sca pol {}".format(i))
-                ax.plot(wl, abs_[:, i], linestyle = ":", label = "abs pol {}".format(i))
+                plot_components(wl, ext[:, i], sca[:, i], abs_[:, i], "pol {}".format(i))
         elif show_all and n_pol > max_individual_pols_to_plot:
             # For many polarizations, show only averages with a note
-            ax.plot(
-                wl,
-                np.mean(ext, axis = 1),
-                color = "black",
-                linewidth = 2.2,
-                label = "ext avg ({} pols)".format(n_pol),
-            )
-            ax.plot(
-                wl,
-                np.mean(sca, axis = 1),
-                color = "black",
-                linestyle = "--",
-                linewidth = 2.0,
-                label = "sca avg ({} pols)".format(n_pol),
-            )
-            ax.plot(
-                wl,
-                np.mean(abs_, axis = 1),
-                color = "black",
-                linestyle = ":",
-                linewidth = 2.0,
-                label = "abs avg ({} pols)".format(n_pol),
-            )
+            if quantity_key in ("all", "ext"):
+                ax.plot(
+                    wl,
+                    np.mean(ext, axis = 1),
+                    color = "black",
+                    linewidth = 2.2,
+                    label = "ext avg ({} pols)".format(n_pol),
+                )
+            if quantity_key in ("all", "sca"):
+                ax.plot(
+                    wl,
+                    np.mean(sca, axis = 1),
+                    color = "black",
+                    linestyle = "--",
+                    linewidth = 2.0,
+                    label = "sca avg ({} pols)".format(n_pol),
+                )
+            if quantity_key in ("all", "abs"):
+                ax.plot(
+                    wl,
+                    np.mean(abs_, axis = 1),
+                    color = "black",
+                    linestyle = ":",
+                    linewidth = 2.0,
+                    label = "abs avg ({} pols)".format(n_pol),
+                )
         else:
             # Show single polarization
             i = int(pol_idx)
-            ax.plot(wl, ext[:, i], label = "ext pol {}".format(i))
-            ax.plot(wl, sca[:, i], linestyle = "--", label = "sca pol {}".format(i))
-            ax.plot(wl, abs_[:, i], linestyle = ":", label = "abs pol {}".format(i))
+            plot_components(wl, ext[:, i], sca[:, i], abs_[:, i], "pol {}".format(i))
 
         if show_all and n_pol > 1 and show_individual:
-            ax.plot(
-                wl,
-                np.mean(ext, axis = 1),
-                color = "black",
-                linewidth = 2.2,
-                label = "ext avg",
-            )
-            ax.plot(
-                wl,
-                np.mean(sca, axis = 1),
-                color = "black",
-                linestyle = "--",
-                linewidth = 2.0,
-                label = "sca avg",
-            )
-            ax.plot(
-                wl,
-                np.mean(abs_, axis = 1),
-                color = "black",
-                linestyle = ":",
-                linewidth = 2.0,
-                label = "abs avg",
-            )
+            if quantity_key in ("all", "ext"):
+                ax.plot(
+                    wl,
+                    np.mean(ext, axis = 1),
+                    color = "black",
+                    linewidth = 2.2,
+                    label = "ext avg",
+                )
+            if quantity_key in ("all", "sca"):
+                ax.plot(
+                    wl,
+                    np.mean(sca, axis = 1),
+                    color = "black",
+                    linestyle = "--",
+                    linewidth = 2.0,
+                    label = "sca avg",
+                )
+            if quantity_key in ("all", "abs"):
+                ax.plot(
+                    wl,
+                    np.mean(abs_, axis = 1),
+                    color = "black",
+                    linestyle = ":",
+                    linewidth = 2.0,
+                    label = "abs avg",
+                )
+
+        quantity_label_map = {
+            "all": "All",
+            "ext": "Extinction",
+            "sca": "Scattering",
+            "abs": "Absorption",
+        }
+        quantity_title = quantity_label_map.get(quantity_key, "All")
 
         ax.set_xlabel("Wavelength (nm)")
         ax.set_ylabel("Cross Section")
         if show_all:
-            ax.set_title("Spectrum Overview ({} polarizations)".format(n_pol) if not show_individual else "Spectrum Overview")
+            if show_individual:
+                ax.set_title("{} Spectrum Overview".format(quantity_title))
+            else:
+                ax.set_title("{} Spectrum Overview ({} polarizations)".format(quantity_title, n_pol))
         else:
-            ax.set_title("Spectrum Overview (Polarization {})".format(int(pol_idx)))
+            ax.set_title("{} Spectrum Overview (Polarization {})".format(quantity_title, int(pol_idx)))
         ax.grid(True, alpha = 0.3)
         ax.legend(fontsize = 8, loc = 'best')
         fig.tight_layout()
@@ -627,6 +669,14 @@ class ProcessingPage(QWidget):
             return int(val)
         except Exception:
             return -1
+
+    def _selected_spectrum_quantity(self) -> str:
+        if self._spec_quantity_selector is None:
+            return "all"
+        val = self._spec_quantity_selector.currentData()
+        if val is None:
+            return "all"
+        return str(val)
 
     def _refresh_spectrum_selector(self, raw: dict | None):
         if self._spec_pol_selector is None:
