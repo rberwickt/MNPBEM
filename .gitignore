@@ -21,3 +21,7 @@ GUI/temp_sim.py
 !/GUI/
 !/GUI/images/
 !/GUI/images/*.png
+
+!/docs/
+!/docs/gui_images/
+!/docs/gui_images/*.png

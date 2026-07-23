@@ -5,7 +5,6 @@ from ..widgets.solver_options import SolverOptionsWidget
 from ..widgets.excitation_settings import ExcitationSettingsWidget
 from ..widgets.material_settings import MaterialOptionsWidget
 from ..widgets.structure_settings import StructureSettingsWidget
-from ..widgets.energy_range import EnergyRangeWidget
 from ..widgets.field_grid import FieldGridWidget
 from ..widgets.simulation_dialog import SimulationProgressDialog
 from ..widgets.refractive_display import RefractiveIndexWidget
@@ -42,13 +41,12 @@ class SimulationPage(QWidget):
         
         self.solver_options = SolverOptionsWidget(state)
         self.col_1.addWidget(self.solver_options)
-        
-
-        self.energy_range = EnergyRangeWidget(state)
-        self.col_1.addWidget(self.energy_range)
 
         self.field_grid = FieldGridWidget(state)
         self.col_1.addWidget(self.field_grid)
+
+        self.refractive_index = RefractiveIndexWidget(state)
+        self.col_1.addWidget(self.refractive_index)
         
         self.col_1.addStretch()
 
@@ -66,9 +64,6 @@ class SimulationPage(QWidget):
 
         self.excitation_settings = ExcitationSettingsWidget(state)
         self.col_3.addWidget(self.excitation_settings)
-
-        self.refractive_index = RefractiveIndexWidget(state)
-        self.col_3.addWidget(self.refractive_index)
 
         self.run_btn = QPushButton("Run Simulation", self)
         self.run_btn.clicked.connect(self.on_run_simulation_clicked)
@@ -91,8 +86,6 @@ class SimulationPage(QWidget):
 
         self.solver_options.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.solver_options.setMinimumWidth(0)
-        self.energy_range.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self.energy_range.setMinimumWidth(0)
         self.field_grid.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.field_grid.setMinimumWidth(0)
 

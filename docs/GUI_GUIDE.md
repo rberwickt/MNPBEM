@@ -1,0 +1,1 @@
+![test image](../GUI/images/Landes_group_logo_cropped.png)
