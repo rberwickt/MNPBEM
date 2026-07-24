@@ -83,20 +83,62 @@ The z range and steps can remain at 0, as unless a 3D graph of points is require
 
 #### Refractive Index Graph
 
-This graph is purely for inspecting the dielectric function of the materials, and does not effect the simulation at all. It allows for viewing 
+This graph is purely for inspecting the dielectric function of the materials, and does not effect the simulation at all. It allows for viewing the real and complex dielectric function of any loaded material, either separately or on the same graph.
 
 #### Environment Settings
 
-
+The environment settings are for configuring the materials of the surrounding area of the particle. There is a toggle box to enable substrate, which allows for configuring both the material and the distance from the structure of the substrate if enabled. The substrate can be seen on the mesh preview in structure settings as well.
 
 #### Structure Settings
 
+Structure settings allows the user to choose the shape and material of the structure, as well as configure the mesh shape and density. The "refine" parameter does not effect the quality of the mesh, but increases the precision of the calculations. It should generally remain as 2-3, and is generally not recommended to be changed by the user. 
+
+Each shape has it's unique parameters appear under "Shape Settings (*selected shape*)", with some commonalities. The "Mesh Element Size" parameter is the distance between the vertices in nm, and decreasing the element size increases the amount of faces/vertices. 
+
+Uniquely, the sphere shape does not have this parameter and instead directly uses the direct vertex count. This means it behaves the opposite of mesh element size, and more vertices creates a more dense mesh.
+
+In the table at the bottom of the structure settings, the user can add uniform shells around their structure and configure material and thickness. These shells are the exact same shape as the core, and also inherit the same density parameters (or vertex count). The shells have no gap between the core and the shell.
 
 ##### Mesh Preview
 
+<img src="./gui_images/shell_mesh.png" alt="Mesh Preview Window" style="vertical-align: middle;">
 
+Once a structure and material have been selected, the "Preview Mesh" button can be used to look at what the simulated structure is going to be. In this example image, there is a nanosphere with substrate and one shell. The darker plane at the bottom of the model is the substrate in this case.
+
+At the top of the window, the different layers of shells and core can be selected to see what they look like. At this time there is no way to view a cross section of the structure.
 
 #### Excitation Settings
 
+This section is used to select the excitation source for the experiment. At this time, the field calculations are only compatible with plane wave excitation. 
 
+The plane wave settings allow for multiple polarizations, with PX, PY, PZ being the polarization vector and DX, DY, DZ being the direction vector. In the post-processing section, the results for each polarization can be averaged if desired.
 
+#### Simulation Window
+
+<img src="./gui_images/sim_loading.png" alt="Sim Progess Window" style="vertical-align: middle;">
+
+Once the simulation is started with the "Run Simulation" button, a progress window will appear to show relevant information. More descriptive output is shown in the command prompt/console if desired. Once the simulation is finished, the GUI will continue to the post-processing screen once the "OK" button is pressed on the pop-up window.
+
+<img src="./gui_images/sim_done.png" alt="Simumlation Complete Window" style="vertical-align: middle;">
+
+### Post-Processing
+
+At this time, the post-processing window supports 2 pages of calculations. The spectra page shows the optical cross section, while the fields page shows the near field enhancement.
+
+#### Spectra
+
+<img src="./gui_images/spectra_screen.png" alt="Spectra Screen" style="vertical-align: middle;">
+
+By pressing "Run Analysis", the cross section spectra will be shown in the area below. Using the "Pol" and "Quantity" boxes, the polarization and desired value can be graphed. If "All Polarizations" are selected, the average will also be graphed alongside the polarizations.
+
+Any changes to the polarization viewed can only be see after pressing the Run Analysis button again.
+
+#### Fields
+
+<img src="./gui_images/fields_screen.png" alt="Fields Screen" style="vertical-align: middle;">
+
+The fields screen shows the near field enhancement, in both linear and log color scale. The "View" box has 4 different settings: Auto, 2D, 3D, and Scatter. Auto will select either 2D or 3D depending on the amount of z slices. 2D is the interpolated version of Scatter, so if you would like to see the uninterpolated graph scatter is a good backup.
+
+The wavelength index is the step (zero indexed) from the simulation page you are viewing. The actual wavelength value can be seen at the title of the graph after hitting run analysis. The Pol Idx is the index of the polarization of the plane wave, starting at zero. If negative 1 is selected, it will instead average all of the polarizations and say "Avg (All)" as shown in the image. 
+
+By default, the color scale is based off of percentiles, which can be set by P Low and P High. If "Use Percentile Clipping" is disabled, the bounds can be manually set by enabling "Use manual log bounds" nad changing log vmin and log vmax.
