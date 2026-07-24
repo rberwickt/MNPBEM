@@ -3,6 +3,10 @@
 ### Setup
 Detailed setup instructions can be found in the [setup guide](./GUI_SETUP.md).
 
+##### Debug Menu
+
+All variables in the simulation state may be viewed by pressing "View State" in the toolbar. This is mainly used to view the GUi for debugging purposes, but can also be used to view previous settings if you don't remember what you entered.
+
 ## How to use the GUI
 The GUI is divided into 3 main screens: __Setup__, __Simulation__, and __Post-Processing__. 
 >At this time, there is no way to move to the previous screen, so any mistakes made on the previous screen will have to be corrected by running the GUI again.
